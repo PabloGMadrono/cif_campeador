@@ -1,0 +1,119 @@
+"""Fast checks of the benchmark itself; these do not measure OCR accuracy."""
+
+import contextlib
+import io
+import tempfile
+import unittest
+from dataclasses import fields, replace
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+
+from pydantic import ValidationError
+
+from src.ocr.models import Invoice
+from tests.invoice_accuracy import PASS_THRESHOLD, load_ground_truths, normalize, score_invoice
+from tests import test_invoice_accuracy as benchmark
+
+
+class InvoiceScoringTests(unittest.TestCase):
+    def setUp(self):
+        self.expected = Invoice(
+            fecha="9/08/2022", numero_factura="001-02", nif_proveedor="A-123",
+            nombre_proveedor="Example S.L.", base_imponible="1.117,04 €",
+            tipo_iva="21,00%", cuota_iva="230,13 €", total="1.347,17 €",
+        )
+
+    def test_model_has_exactly_the_eight_scored_csv_fields(self):
+        self.assertEqual({item.metadata["csv"] for item in fields(Invoice)}, {
+            "Fecha", "Nº de factura", "NIF proveedor", "Nombre Proveedor",
+            "Base Imponible", "Tipo IVA %", "Cuota IVA", "Total",
+        })
+
+    def test_equivalent_formats_receive_full_credit(self):
+        actual = replace(
+            self.expected, fecha="2022-08-09", nombre_proveedor="  EXAMPLE   S.L. ",
+            base_imponible="1117.04", tipo_iva="21", cuota_iva="230.130", total="1347.17",
+        )
+        self.assertEqual(score_invoice(actual, self.expected).accuracy, 1)
+
+    def test_each_field_is_equal_weight_and_six_of_eight_are_needed(self):
+        for count in range(9):
+            with self.subTest(correct=count):
+                actual = replace(self.expected, **{
+                    item.name: None for item in fields(Invoice)[count:]
+                })
+                score = score_invoice(actual, self.expected)
+                self.assertEqual(score.matched, count)
+                self.assertEqual(score.accuracy > PASS_THRESHOLD, count >= 6)
+        self.assertFalse(0.70 > PASS_THRESHOLD)
+
+    def test_missing_reference_field_is_still_scored(self):
+        expected = replace(self.expected, nif_proveedor="")
+        self.assertEqual(score_invoice(replace(expected, nif_proveedor=None), expected).matched, 8)
+        self.assertEqual(score_invoice(self.expected, expected).matched, 7)
+
+    def test_identifier_zeroes_and_numeric_errors_are_not_forgiven(self):
+        actual = replace(self.expected, numero_factura="1-02", total="1347.18")
+        self.assertEqual(score_invoice(actual, self.expected).mismatches, ("numero_factura", "total"))
+
+    def test_invalid_values_count_as_wrong_fields(self):
+        for value in ("NaN", "Infinity", "junk", "1,2,3"):
+            with self.subTest(value=value):
+                self.assertEqual(score_invoice(replace(self.expected, total=value), self.expected).matched, 7)
+        with self.assertRaises(TypeError):
+            score_invoice("plain OCR text", self.expected)
+        with self.assertRaises(ValueError):
+            normalize("fecha", "31/02/2022")
+
+    def test_model_rejects_incorrect_types_missing_fields_and_extra_fields(self):
+        with self.assertRaises(ValidationError):
+            replace(self.expected, total=1347.17)
+        with self.assertRaises(ValidationError):
+            Invoice()
+        with self.assertRaises(ValidationError):
+            replace(self.expected, unexpected="extra")
+
+    def test_real_ground_truths_load_without_recomputing_amounts(self):
+        rows = load_ground_truths(Path(__file__).parent / "ground_truths" / "ground_truth_trial_invoices.csv")
+        self.assertEqual(len(rows), 18)
+        self.assertEqual(dict(rows)["IMG_3311.HEIC"].cuota_iva, "230,13 €")
+        self.assertTrue(all(score_invoice(invoice, invoice).matched == 8 for _, invoice in rows))
+
+    def run_benchmark_harness(self, outputs):
+        # Test doubles exercise reporting/error handling only, never OCR quality.
+        extractor = SimpleNamespace(extract_invoice=Mock(side_effect=outputs))
+        rows = [(f"image_{index}.HEIC", self.expected) for index in range(len(outputs))]
+        result = unittest.TestResult()
+        output = io.StringIO()
+        with (
+            tempfile.TemporaryDirectory() as report_directory,
+            patch.object(benchmark, "REPORTS_DIR", Path(report_directory)),
+            patch.object(benchmark, "load_ground_truths", return_value=rows),
+            patch.object(benchmark, "invoice_extractor", extractor),
+            patch.object(Path, "is_file", return_value=True),
+            contextlib.redirect_stdout(output),
+        ):
+            benchmark.InvoiceAccuracyTests("test_trial_invoices").run(result)
+        return result, output.getvalue(), extractor.extract_invoice.call_count
+
+    def test_execution_failure_counts_zero_and_remaining_rows_still_run(self):
+        result, output, calls = self.run_benchmark_harness([RuntimeError("unavailable"), self.expected])
+        self.assertEqual(calls, 2)
+        self.assertEqual(len(result.failures), 2)  # Failed invoice and failed global score.
+        self.assertFalse(result.errors)
+        self.assertIn("image_0.HEIC: 0/8 = 0.00%", output)
+        self.assertIn("image_1.HEIC: 8/8 = 100.00%", output)
+        self.assertIn("GLOBAL: 8/16 = 50.00%", output)
+
+    def test_passing_global_score_does_not_hide_a_failing_invoice(self):
+        result, output, calls = self.run_benchmark_harness([Invoice.empty()] + [self.expected] * 3)
+        self.assertEqual(calls, 4)
+        self.assertEqual(len(result.failures), 1)
+        self.assertIn("GLOBAL: 24/32 = 75.00%", output)
+
+    def test_passing_benchmark(self):
+        result, output, calls = self.run_benchmark_harness([self.expected, self.expected])
+        self.assertTrue(result.wasSuccessful())
+        self.assertEqual(calls, 2)
+        self.assertIn("GLOBAL: 16/16 = 100.00%", output)
