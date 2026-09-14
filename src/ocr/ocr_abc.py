@@ -33,8 +33,18 @@ Preserve invoice identifiers, leading zeroes, punctuation, and supplier names.
 Return dates as YYYY-MM-DD when unambiguous. Return monetary amounts as decimal
 strings in euros without currency symbols or thousands separators. Return VAT
 rates in percentage points (21 for 21%, not 0.21). Use the printed taxable base,
-VAT amount and total; do not recalculate or correct them. If several VAT rates
-are listed and no single overall rate is printed, return null for tipo_iva.
+VAT amount and total; do not recalculate or correct those monetary fields.
+For tipo_iva, use a printed single overall VAT rate when available. If several
+VAT rates are listed without a single overall rate, calculate the effective
+overall percentage as 100 * sum(printed VAT amounts) / sum(their corresponding
+printed taxable bases), rounded to two decimal places. This calculation is an
+explicit exception to extracting only printed values. Use each VAT breakdown
+row once; do not also count subtotals or grand totals. Do not use the unweighted
+arithmetic mean of the rates or divide by the VAT-inclusive payment total.
+Exclude donations and other amounts outside those VAT rows. For example, bases
+of 100.00 at 10% and 50.00 at 21%, with VAT amounts of 10.00 and 10.50, give
+tipo_iva = "13.67". If the required bases or VAT amounts are missing or unreadable,
+or the combined taxable base is zero, return null for tipo_iva; do not guess.
 When several identifiers are present, prefer an explicitly labelled invoice or
 simplified-invoice number. Use a ticket, operation, transaction, reference or
 receipt number only when the context identifies it as this document's number;

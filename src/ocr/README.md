@@ -8,6 +8,13 @@ The glossary also guides Qwen and OpenAI text transcription without changing
 printed labels or omitting other text. Surya uses it in the shared invoice parser;
 its local recognition predictor does not accept this prompt.
 
+When several VAT rates are printed without a single overall rate, the shared
+invoice prompt requests an effective `tipo_iva`: `100 * sum(VAT amounts) /
+sum(corresponding taxable bases)`, rounded to two decimal places. It uses each
+printed VAT row once, excludes unrelated amounts, and returns null if the
+required values are missing/unreadable or the combined base is zero. This is
+an explicit exception for the rate; printed monetary fields remain unchanged.
+
 ## Mistral Document AI OCR
 
 `Ocr_mistral` uses [Mistral's OCR API](https://docs.mistral.ai/studio/document-processing/basic_ocr)
