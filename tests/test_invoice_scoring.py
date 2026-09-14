@@ -2,6 +2,7 @@
 
 import contextlib
 import io
+import os
 import tempfile
 import unittest
 from dataclasses import fields, replace
@@ -12,7 +13,10 @@ from unittest.mock import Mock, patch
 from pydantic import ValidationError
 
 from src.ocr.models import Invoice
-from tests.invoice_accuracy import PASS_THRESHOLD, load_ground_truths, normalize, score_invoice
+from tests.invoice_accuracy import (
+    PASS_THRESHOLD, image_category, image_index, load_ground_truths, normalize,
+    resolve_image, score_invoice,
+)
 from tests import test_invoice_accuracy as benchmark
 
 
@@ -117,3 +121,42 @@ class InvoiceScoringTests(unittest.TestCase):
         self.assertTrue(result.wasSuccessful())
         self.assertEqual(calls, 2)
         self.assertIn("GLOBAL: 16/16 = 100.00%", output)
+
+    def test_all_real_csv_images_resolve_in_category_folders(self):
+        from collections import Counter
+        root = Path(__file__).parent / "images" / "trial_invoices"
+        index = image_index(root)
+        rows = load_ground_truths(root.parents[1] / "ground_truths" / "ground_truth_trial_invoices.csv")
+        paths = [resolve_image(root, filename, index) for filename, _ in rows]
+        self.assertTrue(all(path.is_file() for path in paths))
+        self.assertEqual(Counter(image_category(root, path) for path in paths),
+                         {"easy": 6, "medium": 8, "hard": 3, "special_cases": 1})
+
+    def test_categorized_harness_uses_real_paths_and_weighted_global_summary(self):
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = [root / "images" / category / name for category, name in
+                     (("easy", "one.png"), ("easy", "two.png"), ("hard", "three.png"))]
+            for path in paths:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with Image.new("RGB", (10, 10)) as image:
+                    image.save(path)
+            extractor = SimpleNamespace(extract_invoice=Mock(side_effect=[
+                self.expected, self.expected, RuntimeError("OCR failed"),
+            ]))
+            output = io.StringIO()
+            result = unittest.TestResult()
+            with (
+                patch.dict(os.environ, {"OCR_IMAGE_DIR": str(root / "images")}),
+                patch.object(benchmark, "REPORTS_DIR", root / "reports"),
+                patch.object(benchmark, "load_ground_truths", return_value=[(p.name, self.expected) for p in paths]),
+                patch.object(benchmark, "invoice_extractor", extractor),
+                contextlib.redirect_stdout(output),
+            ):
+                benchmark.InvoiceAccuracyTests("test_trial_invoices").run(result)
+            self.assertFalse(result.errors)
+            self.assertEqual([Path(call.args[0]) for call in extractor.extract_invoice.call_args_list], paths)
+            self.assertIn("easy: 16/16 = 100.00%", output.getvalue())
+            self.assertIn("hard: 0/8 = 0.00%", output.getvalue())
+            self.assertIn("GLOBAL: 16/24 = 66.67%", output.getvalue())

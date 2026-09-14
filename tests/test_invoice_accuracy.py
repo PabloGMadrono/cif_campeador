@@ -9,7 +9,7 @@ from time import monotonic
 
 from src.ocr import invoice_extractor
 from tests.invoice_accuracy import INVOICE_FIELDS, PASS_THRESHOLD, load_ground_truths, score_invoice
-from tests.invoice_report import DEFAULT_REPORTS_DIR, ExecutionReport
+from tests.invoice_report import DEFAULT_REPORTS_DIR, ExecutionReport, summarize_categories
 
 
 TESTS = Path(__file__).resolve().parent
@@ -58,7 +58,7 @@ class InvoiceAccuracyTests(unittest.TestCase):
                 report.start(filename)
                 started = monotonic()
                 try:
-                    image_path = image_directory / filename
+                    image_path = image_directory / report.records[filename]["source_path"]
                     if not image_path.is_file():
                         raise FileNotFoundError(f"Invoice image not found: {image_path}")
                     # Only the image path crosses the public OCR boundary.
@@ -83,6 +83,11 @@ class InvoiceAccuracyTests(unittest.TestCase):
 
             field_total = len(rows) * fields_per_invoice
             global_accuracy = matched_total / field_total
+            print("\nAccuracy by category:", flush=True)
+            for category in summarize_categories(report.data):
+                print(f"{category['category']}: {category['correct_fields']}/{category['scored_fields']} "
+                      f"= {category['accuracy_pct']:.2f}% "
+                      f"({category['images_scored']}/{category['images_total']} invoices)", flush=True)
             print(f"GLOBAL: {matched_total}/{field_total} = {global_accuracy:.2%}", flush=True)
             with self.subTest(scope="global"):
                 self.assertGreater(global_accuracy, PASS_THRESHOLD)

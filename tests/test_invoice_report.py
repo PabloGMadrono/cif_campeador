@@ -13,7 +13,7 @@ from PIL import Image
 
 from src.ocr.models import Invoice
 from tests.invoice_accuracy import score_invoice
-from tests.invoice_report import ExecutionReport, atomic_write, prepare_dashboard, refresh_reports
+from tests.invoice_report import ExecutionReport, atomic_write, prepare_dashboard, refresh_reports, summarize_categories
 
 
 class InvoiceReportTests(unittest.TestCase):
@@ -179,3 +179,55 @@ class InvoiceReportTests(unittest.TestCase):
         self.assertEqual(self.read_csv(self.output / "executions.csv")[0]["outcome"], "passed")
         self.assertEqual(len(self.read_csv(report.run_directory / "results.csv")), 2)
         self.assertIn(report.run_id, (self.output / "dashboard.html").read_text(encoding="utf-8"))
+
+    def test_categories_persist_and_errors_count_zero_while_pending_are_unscored(self):
+        for category, name in (("easy", "one.png"), ("hard", "two.png")):
+            (self.images / category).mkdir()
+            (self.images / name).rename(self.images / category / name)
+        report = ExecutionReport(self.rows, self.images, self.output, "example.Extractor")
+        report.start("one.png")
+        report.record("one.png", self.expected, score_invoice(self.expected, self.expected), None, 1)
+        categories = {r["category"]: r for r in summarize_categories(report.data)}
+        self.assertEqual(categories["easy"]["accuracy_pct"], 100)
+        self.assertIsNone(categories["hard"]["accuracy_pct"])
+        self.assertEqual(categories["hard"]["images_scored"], 0)
+        report.record("two.png", None, None, "timeout", 1)
+        report.__exit__(None, None, None)
+        self.assertEqual(report.records["one.png"]["source_path"], "easy/one.png")
+        self.assertTrue((self.output / report.records["one.png"]["image"]).is_file())
+        categories = self.read_csv(report.run_directory / "categories.csv")
+        self.assertEqual([r["category"] for r in categories], ["easy", "hard"])
+        self.assertEqual([float(r["accuracy_pct"]) for r in categories], [100, 0])
+        self.assertEqual(self.read_csv(self.output / "executions.csv")[0]["accuracy_pct"], "50.0")
+        self.assertEqual(self.read_csv(self.output / "categories.csv"), categories)
+        self.assertEqual(self.read_csv(report.run_directory / "results.csv")[1]["category"], "hard")
+
+    def test_duplicate_basenames_fail_instead_of_selecting_an_arbitrary_image(self):
+        (self.images / "easy").mkdir()
+        (self.images / "easy" / "one.png").write_bytes((self.images / "one.png").read_bytes())
+        with self.assertRaisesRegex(ValueError, "Ambiguous invoice image one.png"):
+            ExecutionReport(self.rows, self.images, self.output, "example.Extractor")
+
+    def test_refresh_adds_legacy_categories_without_changing_predictions_or_scores(self):
+        with ExecutionReport(self.rows, self.images, self.output, "example.Extractor") as report:
+            for filename, expected in self.rows:
+                report.record(filename, expected, score_invoice(expected, expected), None, 1)
+        path = report.run_directory / "run.json"
+        original = json.loads(path.read_text())
+        for row in original["invoices"]:
+            row.pop("category")
+            row.pop("category_source")
+        path.write_text(json.dumps(original), encoding="utf-8")
+        (self.images / "medium").mkdir()
+        (self.images / "one.png").rename(self.images / "medium" / "one.png")
+        refresh_reports(self.output, self.images)
+        updated = json.loads(path.read_text())
+        self.assertEqual(updated["invoices"][0]["category"], "medium")
+        for row in updated["invoices"]:
+            self.assertEqual(row.pop("category_source"), "current_layout")
+            row.pop("category")
+        self.assertEqual(updated, original)
+        # Once assigned, categories are snapshots, even if files move later.
+        (self.images / "medium" / "one.png").rename(self.images / "one.png")
+        refresh_reports(self.output, self.images)
+        self.assertEqual(json.loads(path.read_text())["invoices"][0]["category"], "medium")

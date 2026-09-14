@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_OCR_MODEL = os.getenv(
     "OPENROUTER_OCR_MODEL", "qwen/qwen2.5-vl-72b-instruct"

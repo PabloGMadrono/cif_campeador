@@ -14,7 +14,10 @@ from uuid import uuid4
 
 from filelock import FileLock
 
-from tests.invoice_accuracy import INVOICE_FIELDS, PASS_THRESHOLD, load_ground_truths
+from tests.invoice_accuracy import (
+    INVOICE_FIELDS, PASS_THRESHOLD, category_order, image_category, image_index,
+    load_ground_truths, resolve_image,
+)
 
 
 DEFAULT_REPORTS_DIR = Path(__file__).resolve().parent / "results"
@@ -86,14 +89,16 @@ def snapshot_rows(rows, image_directory, report_directory, relative_directory):
     from pillow_heif import register_heif_opener
 
     register_heif_opener(thumbnails=False)
+    index_by_name = image_index(image_directory)
     records = []
     for index, (filename, expected) in enumerate(rows, start=1):
+        source_path = resolve_image(image_directory, filename, index_by_name)
         preview = relative_directory / "images" / f"{index:03d}.jpg"
         preview_error = None
         try:
             destination = report_directory / preview
             destination.parent.mkdir(parents=True, exist_ok=True)
-            with Image.open(image_directory / filename) as original:
+            with Image.open(source_path) as original:
                 with ImageOps.exif_transpose(original) as oriented:
                     with oriented.convert("RGB") as image:
                         image.thumbnail((1800, 1800))
@@ -104,6 +109,8 @@ def snapshot_rows(rows, image_directory, report_directory, relative_directory):
             preview_error = f"Preview unavailable: {type(error).__name__}: {error}"
         records.append({
             "filename": filename, "image": image_url, "preview_error": preview_error,
+            "source_path": source_path.relative_to(image_directory).as_posix(),
+            "category": image_category(image_directory, source_path), "category_source": "execution",
             "expected": asdict(expected), "obtained": None, "status": "pending",
             "matched": None, "total": len(INVOICE_FIELDS), "accuracy_pct": None,
             "mismatches": [], "error": None, "started_at": None,
@@ -136,6 +143,15 @@ def summarize(run):
     }
 
 
+def summarize_categories(run):
+    categories = sorted({r.get("category", "uncategorized") for r in run["invoices"]}, key=category_order)
+    results = []
+    for category in categories:
+        subset = {**run, "invoices": [r for r in run["invoices"] if r.get("category", "uncategorized") == category]}
+        results.append({"category": category, **summarize(subset)})
+    return results
+
+
 def rebuild_dashboard(directory):
     """Called under the report lock; JSON snapshots are the source of truth."""
     runs = [json.loads(path.read_text(encoding="utf-8"))
@@ -147,6 +163,8 @@ def rebuild_dashboard(directory):
     history_saved = True
     if summaries:
         history_saved = write_export(directory / "executions.csv", csv_text(list(summaries[0]), summaries))
+        categories = [row for run in runs for row in summarize_categories(run)]
+        history_saved = write_export(directory / "categories.csv", csv_text(list(categories[0]), categories)) and history_saved
     payload = {"fields": FIELD_LABELS, "runs": runs, "preview": preview,
                "summaries": summaries, "generated_at": now(), "threshold_pct": PASS_THRESHOLD * 100}
     # JSON is data even when an invoice contains HTML or a closing script tag.
@@ -162,7 +180,7 @@ def write_run_exports(run_directory, data):
     per_field = []
     for record in data["invoices"]:
         per_image.append({
-            "run_id": data["run_id"], **{key: record[key] for key in (
+            "run_id": data["run_id"], "category": record.get("category", "uncategorized"), **{key: record[key] for key in (
                 "filename", "status", "matched", "total", "accuracy_pct",
                 "duration_seconds", "started_at", "finished_at", "error",
             )},
@@ -170,6 +188,7 @@ def write_run_exports(run_directory, data):
         for name, label in FIELD_LABELS.items():
             per_field.append({
                 "run_id": data["run_id"], "filename": record["filename"],
+                "category": record.get("category", "uncategorized"),
                 "status": record["status"], "field": name, "label": label,
                 "expected": record["expected"][name],
                 "obtained": record["obtained"][name] if record["obtained"] is not None else None,
@@ -177,17 +196,32 @@ def write_run_exports(run_directory, data):
             })
     results_saved = write_export(run_directory / "results.csv", csv_text(list(per_image[0]), per_image))
     fields_saved = write_export(run_directory / "fields.csv", csv_text(list(per_field[0]), per_field))
-    return results_saved and fields_saved
+    categories = summarize_categories(data)
+    categories_saved = write_export(run_directory / "categories.csv", csv_text(list(categories[0]), categories))
+    return results_saved and fields_saved and categories_saved
 
 
-def refresh_reports(directory):
-    """Rebuild all exports without rerunning OCR or changing execution records."""
+def refresh_reports(directory, image_directory=None):
+    """Rebuild exports; assign legacy runs categories from today's image layout."""
     directory = Path(directory)
+    image_directory = Path(image_directory or os.environ.get(
+        "OCR_IMAGE_DIR", Path(__file__).resolve().parent / "images" / "trial_invoices"
+    ))
+    index = image_index(image_directory)
     directory.mkdir(parents=True, exist_ok=True)
     saved = True
     with FileLock(str(directory / ".reports.lock"), timeout=30):
         for path in (directory / "runs").glob("*/run.json"):
             data = json.loads(path.read_text(encoding="utf-8"))
+            changed = False
+            for record in data["invoices"]:
+                if "category" not in record and record["filename"].casefold() in index:
+                    source = resolve_image(image_directory, record["filename"], index)
+                    record.update(category=image_category(image_directory, source),
+                                  category_source="current_layout")
+                    changed = True
+            if changed:
+                atomic_write(path, json.dumps(data, ensure_ascii=True, indent=2))
             saved = write_run_exports(path.parent, data) and saved
         saved = rebuild_dashboard(directory) and saved
     return saved

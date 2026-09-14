@@ -8,6 +8,59 @@ The glossary also guides Qwen and OpenAI text transcription without changing
 printed labels or omitting other text. Surya uses it in the shared invoice parser;
 its local recognition predictor does not accept this prompt.
 
+## Mistral Document AI OCR
+
+`Ocr_mistral` uses [Mistral's OCR API](https://docs.mistral.ai/studio/document-processing/basic_ocr)
+with `mistral-ocr-latest` and `include_image_base64=True`. Install
+`requirements.txt` and set `MISTRAL_API_KEY` in your environment or project
+`.env`. The Mistral client is created lazily and reused, with a 120-second
+request timeout. Restart the process after changing configuration.
+
+```python
+from src.ocr.ocr_mistral import Ocr_mistral
+
+ocr = Ocr_mistral()
+text = ocr.extract_text("documento.pdf")
+invoice = ocr.extract_invoice("factura.HEIC")
+```
+
+PDFs are submitted as base64 PDF documents in one call. Images are converted
+to PNG with camera orientation applied and transparency composited onto white;
+HEIC/HEIF and multipage TIFFs are supported. Each image frame gets a separate
+request. `extract_text` returns page Markdown joined with blank lines, retaining
+inline tables. Returned image base64 data is not embedded in the text or saved.
+Encoded documents are held in memory and must fit Mistral's request limits.
+
+`extract_invoice` returns the shared `Invoice` directly in **one Mistral OCR
+request**, using `document_annotation_format` with a strict JSON schema generated
+from the Invoice dataclass. `document_annotation_prompt` reuses the OpenAI image
+invoice instructions, including the shared field rules and Spanish terminology.
+The returned `document_annotation` JSON is validated locally with Pydantic.
+Both extraction methods only require `MISTRAL_API_KEY`; invoice extraction
+does not call the shared OpenAI parser. Explicit calls to the inherited
+`parse_invoice(raw_text)` still use OpenAI and require `OPENAI_API_KEY`.
+
+For invoice annotations, PDFs are sent intact and a single image is sent as PNG.
+Multipage images are packaged into one PDF in frame order (144 DPI, JPEG quality
+95), so annotation sees the whole invoice in one request. This conversion uses
+lossy image compression. Text extraction retains its separate per-frame calls.
+
+An annotation with all eight fields null returns an empty Invoice. Missing,
+malformed or schema-invalid annotations raise `RuntimeError`; there is no parser
+fallback. Empty OCR Markdown alone is not treated as an empty invoice. Plain
+text extraction rejects missing pages. File, API and SDK response-validation
+errors propagate. Extraction sends document content to Mistral and is billable.
+
+To select this backend for the application and accuracy benchmark, set
+`invoice_extractor = Ocr_mistral()` in `src/ocr/__init__.py`.
+
+```shell
+python -m src.ocr.ocr_mistral "documento.pdf"
+python -m unittest tests.test_ocr_mistral -v
+```
+
+The CLI prints Markdown. Adapter tests run offline and do not measure OCR accuracy.
+
 ## Direct invoice extraction with OpenAI Responses
 
 `Ocr_openai.extract_invoice(path)` reads the document and returns the shared
@@ -257,6 +310,13 @@ change that assignment; the tests require no changes. The shared
 instance is reused for all images and receives only document paths. An optional
 `OCR_IMAGE_DIR` overrides the directory containing the images.
 
+Images are discovered recursively below that directory. Keep the CSV's image
+basenames unchanged when moving files into `easy/`, `medium/`, `hard/` or
+`special_cases/`. The first folder below the image root is the category; additional
+category names also work. Files directly in the root are `uncategorized`. Duplicate
+basenames are rejected so the benchmark cannot silently score the wrong image.
+The final console summary prints accuracy for each category followed by GLOBAL.
+
 ## Results dashboard and execution history
 
 The same invoice test command now saves a local dashboard and CSV exports:
@@ -273,6 +333,9 @@ running. It requires no web server or external assets. The report includes:
 - Expected and obtained values, field matches, per-image accuracy, elapsed time
   and extraction errors. Search by filename or filter to issues/pending images.
 - The execution summary, accuracy by field, and a selector for earlier runs.
+- Accuracy by category and overall accuracy, including scored invoice/field counts.
+  Overall accuracy divides all correct fields by all scored fields, rather than
+  averaging category percentages. Browser manual verdicts update this breakdown too.
 - Automatic refresh every ten seconds, which can be paused while inspecting.
 
 Select an execution and click **Rename run** to give it a memorable name. Save
@@ -317,10 +380,12 @@ Each execution gets a unique directory; old results are preserved:
 tests/results/
   dashboard.html             All executions, with embedded report data
   executions.csv             One row per execution, including accuracy and status
+  categories.csv             Per-category accuracy for every execution
   runs/<execution-id>/
     run.json                 Exact expected/obtained values and execution metadata
     results.csv              One row per image: status, accuracy, timing and errors
     fields.csv               One row per field: expected, obtained and match flag
+    categories.csv           Category accuracy and scored/total invoice counts
     images/                  JPEG snapshots for that execution
 ```
 
@@ -344,6 +409,12 @@ all CSVs from the saved JSON without rerunning OCR or making API requests:
 ```shell
 python -m tests.invoice_report --refresh
 ```
+
+Refresh also assigns categories to older saved runs that predate category
+tracking, using the current image folders (or `OCR_IMAGE_DIR`). The dashboard
+labels this assignment; predictions, scores and execution timestamps are retained.
+New runs snapshot their category at execution time, so moving images later does
+not change their history. Missing legacy categories display as `uncategorized`.
 
 Results from executions before this feature cannot be recovered from partial
 console output; new executions populate the history automatically.

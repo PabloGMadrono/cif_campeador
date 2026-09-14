@@ -16,6 +16,33 @@ PASS_THRESHOLD = 0.70
 NUMERIC_FIELDS = {"base_imponible", "tipo_iva", "cuota_iva", "total"}
 
 
+def image_index(directory: Path) -> dict[str, list[Path]]:
+    """Index basenames recursively; CSV names remain independent of folder layout."""
+    index = {}
+    for path in sorted(directory.rglob("*")):
+        if path.is_file():
+            index.setdefault(path.name.casefold(), []).append(path)
+    return index
+
+
+def resolve_image(directory: Path, filename: str, index: dict) -> Path:
+    matches = index.get(filename.casefold(), [])
+    if len(matches) > 1:
+        raise ValueError(f"Ambiguous invoice image {filename}: " + ", ".join(str(p) for p in matches))
+    # Keep missing images reportable as execution errors, just like flat datasets.
+    return matches[0] if matches else directory / filename
+
+
+def image_category(directory: Path, path: Path) -> str:
+    parts = path.relative_to(directory).parts
+    return parts[0] if len(parts) > 1 else "uncategorized"
+
+
+def category_order(category: str):
+    preferred = ("easy", "medium", "hard", "special_cases")
+    return (preferred.index(category) if category in preferred else len(preferred), category)
+
+
 def load_ground_truths(path: Path) -> list[tuple[str, Invoice]]:
     """Read all rows, rejecting incomplete schemas and duplicate image names."""
     with path.open(encoding="utf-8-sig", newline="") as source:

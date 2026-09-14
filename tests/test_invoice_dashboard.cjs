@@ -20,7 +20,7 @@ function dashboard(persisted = new Map(), blocked = false) {
   const fields = Object.fromEntries(Array.from({length: 8}, (_, i) => ['f' + i, 'Field ' + i]));
   const values = Object.fromEntries(Object.keys(fields).map(name => [name, 'value']));
   const invoice = {
-    filename: 'one.png', status: 'failed', matched: 5, total: 8, accuracy_pct: 62.5,
+    filename: 'one.png', category: 'easy', status: 'failed', matched: 5, total: 8, accuracy_pct: 62.5,
     mismatches: ['f0', 'f1', 'f2'], expected: values, obtained: {...values},
     image: null, error: null, duration_seconds: 1,
   };
@@ -33,8 +33,8 @@ function dashboard(persisted = new Map(), blocked = false) {
   second.run_id = 'second';
   second.status = 'interrupted';
   second.invoices.push(
-    {...invoice, filename: 'pending.png', status: 'pending', obtained: null, matched: null, accuracy_pct: null, mismatches: []},
-    {...invoice, filename: 'error.png', status: 'error', obtained: null, matched: 0, accuracy_pct: 0, mismatches: Object.keys(fields)},
+    {...invoice, filename: 'pending.png', category: 'medium', status: 'pending', obtained: null, matched: null, accuracy_pct: null, mismatches: []},
+    {...invoice, filename: 'error.png', category: 'hard', status: 'error', obtained: null, matched: 0, accuracy_pct: 0, mismatches: Object.keys(fields)},
   );
   const runs = [run, second];
   get('report-data').textContent = JSON.stringify({runs, fields, summaries: runs.map(r => ({...r, images_scored: 1, images_total: r.invoices.length, accuracy_pct: 62.5, outcome: 'failed'}))});
@@ -111,4 +111,32 @@ test('strict threshold applies to manual scores and original values are preserve
   assert.equal(page.evaluate('run.invoices[0].expected.f0'), 'value');
   assert.equal(page.evaluate('run.invoices[0].obtained.f0'), 'value');
   assert.equal(page.evaluate('run.invoices[0].automated.accuracy_pct'), 62.5);
+});
+
+test('categories include zero-score errors, exclude pending and update after review', () => {
+  const saved = new Map();
+  const page = dashboard(saved);
+  page.evaluate("chooseRun('second')");
+  const categories = JSON.parse(page.evaluate('JSON.stringify(categorySummaries())'));
+  assert.deepEqual(categories.map(r => r.category), ['easy', 'medium', 'hard']);
+  assert.deepEqual(categories.map(r => r.accuracy), [62.5, null, 0]);
+  assert.match(page.get('category-summary').innerHTML, /Not evaluated/);
+  assert.match(page.get('category-summary').innerHTML, /Overall/);
+  page.evaluate("setFieldReview('second','one.png','f0','correct');render()");
+  assert.equal(page.evaluate('categorySummaries()[0].accuracy'), 75);
+  assert.equal(page.evaluate('summary().accuracy'), 37.5);
+  assert.match(page.get('category-summary').innerHTML, /Manually reviewed/);
+  const reloaded = dashboard(saved);
+  reloaded.evaluate("chooseRun('second')");
+  assert.equal(reloaded.evaluate('categorySummaries()[0].accuracy'), 75);
+});
+
+test('overall weights invoices, and legacy records have an uncategorized fallback', () => {
+  const page = dashboard();
+  page.evaluate("chooseRun('second');run.invoices.push({...run.invoices[0],filename:'extra.png'});render()");
+  assert.equal(page.evaluate('categorySummaries()[0].accuracy'), 62.5);
+  assert.equal(page.evaluate('summary().accuracy'), 100 * 10 / 24);
+  assert.match(page.get('category-summary').innerHTML, /41.67%/);
+  page.evaluate("delete run.invoices[0].category;render()");
+  assert.match(page.get('category-summary').innerHTML, /Uncategorized/);
 });
