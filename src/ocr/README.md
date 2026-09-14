@@ -173,7 +173,7 @@ Run the offline adapter tests with:
 python -m unittest tests.test_ocr_qwen -v
 ```
 
-## Surya OCR on CPU
+## Surya OCR with CPU or NVIDIA CUDA llama.cpp
 
 Use 64-bit Python 3.12 on Windows/Linux. Install from the repository root.
 The requirements select CPU-only PyTorch and torchvision wheels:
@@ -184,30 +184,50 @@ python -m pip install -r requirements.txt
 
 The requirements also install the HEIC decoder needed for iPhone photos.
 
-On Windows, also download the **Windows CPU x64** ZIP from the
-[llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases) and extract
-the entire archive (including DLLs), for example into `C:\Tools\llama.cpp`.
-This executable cannot be installed by `pip install -r requirements.txt`.
-Point Surya to the extracted executable in the PowerShell session where you
-run Python (adjust the path to match the archive's directory structure):
+On Windows, download and extract the **Windows CPU x64** llama.cpp ZIP. For an
+NVIDIA GPU, also download the matching **Windows CUDA x64** ZIP and its CUDA
+runtime ZIP from the same [llama.cpp release](https://github.com/ggml-org/llama.cpp/releases),
+then extract both CUDA archives into one directory. These executables cannot be
+installed by `pip install -r requirements.txt`.
 
-```powershell
-$env:LLAMA_CPP_BINARY = "C:\Tools\llama.cpp\llama-server.exe"
-& $env:LLAMA_CPP_BINARY --version
+Configure both paths once and select the runtime in the project `.env`:
+
+```dotenv
+LLAMA_CPP_CPU_BINARY=C:\Tools\llama.cpp-cpu\llama-server.exe
+LLAMA_CPP_CUDA_BINARY=C:\Tools\llama.cpp-cuda\llama-server.exe
+SURYA_LLAMA_DEVICE=cpu
 ```
 
-Alternatively, add the directory containing `llama-server.exe` to PATH. On
-Linux, install the CPU build of `llama-server` and put it on PATH.
+`SURYA_LLAMA_DEVICE` accepts only `cpu` or `cuda`. CPU is the default. The old
+`LLAMA_CPP_BINARY` variable remains a fallback for CPU configurations. CUDA
+requires `LLAMA_CPP_CUDA_BINARY` so selecting it cannot silently launch a CPU
+binary.
 
-`Ocr_surya` explicitly selects the `llamacpp` backend, uses CPU for PyTorch,
-disables GPU offloading for both the language and vision models, and defaults
-to one inference request at a time to reduce memory use. These Surya settings
-apply to the Python process. No additional device argument is needed.
-First use downloads model weights and starts the local backend automatically;
-CPU OCR can take considerably longer than GPU OCR.
+Verify either executable directly in PowerShell:
 
-For a local CPU backend, leave `SURYA_INFERENCE_URL` unset. If you previously
-set it, remove it in PowerShell with
+```powershell
+& "C:\Tools\llama.cpp-cpu\llama-server.exe" --version
+& "C:\Tools\llama.cpp-cuda\llama-server.exe" --list-devices
+```
+
+`Ocr_surya` always uses the `llamacpp` backend and defaults to one inference
+request at a time. In CPU mode it disables all GPU offloading. In CUDA mode it
+requests all model layers and the vision projector on the NVIDIA GPU. Python-side
+preprocessing continues to use CPU-only PyTorch in both modes. If CUDA runs out
+of VRAM, lower `settings.LLAMA_CPP_NGL` from 99 in the adapter.
+
+First use downloads model weights and starts the selected local backend
+automatically. Restart Python after changing `.env`, because configuration is
+loaded once per process. If `SURYA_INFERENCE_KEEP_ALIVE` is enabled, stop the
+existing `llama-server` before switching devices so Surya does not reconnect to
+the server started with the previous executable:
+
+```powershell
+Get-Process llama-server -ErrorAction SilentlyContinue | Stop-Process
+```
+
+For either local llama.cpp backend, leave `SURYA_INFERENCE_URL` unset. If you
+previously set it, remove it in PowerShell with
 `Remove-Item Env:SURYA_INFERENCE_URL -ErrorAction SilentlyContinue`; otherwise
 Surya connects to that server, whose hardware is configured separately.
 
@@ -263,7 +283,7 @@ two concrete methods; direct vision backends can override `extract_invoice`:
 
 Set `OPENAI_API_KEY` in your environment or project `.env` before running the
 invoice benchmark. `src/config.py` loads the project `.env` once and exposes
-`OPENAI_API_KEY` and `LLAMA_CPP_BINARY` for the OCR modules to import. Existing
+API keys and the llama.cpp runtime selection for the OCR modules to import. Existing
 environment variables take precedence; restart the process after changing
 configuration. The OpenAI client is a cached property, created on first use
 and reused without a constructor or a manual initialization check. Plain

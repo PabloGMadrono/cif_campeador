@@ -18,6 +18,15 @@ def block(html, order=0, **flags):
 
 class SuryaOcrTests(unittest.TestCase):
     def setUp(self):
+        config_patcher = patch.multiple(
+            "src.ocr.ocr_surya",
+            SURYA_LLAMA_DEVICE="cpu",
+            LLAMA_CPP_CPU_BINARY="cpu-llama-server",
+            LLAMA_CPP_CUDA_BINARY=None,
+        )
+        config_patcher.start()
+        self.addCleanup(config_patcher.stop)
+
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.path = Path(directory.name) / "documento.pdf"
@@ -104,6 +113,46 @@ class SuryaOcrTests(unittest.TestCase):
         self.predictor.return_value = []
         Ocr_surya().extract_text(str(self.path))
         self.manager_factory.assert_called_once_with(method="llamacpp")
+        self.assertEqual(self.settings.LLAMA_CPP_BINARY, "cpu-llama-server")
+
+    def test_cuda_settings_and_binary_are_applied_before_backend_creation(self):
+        def create_manager(*, method):
+            self.assertEqual(method, "llamacpp")
+            self.assertEqual(self.settings.TORCH_DEVICE, "cpu")
+            self.assertEqual(self.settings.LLAMA_CPP_BINARY, "cuda-llama-server")
+            self.assertEqual(self.settings.LLAMA_CPP_NGL, 99)
+            self.assertFalse(self.settings.LLAMA_CPP_NO_MMPROJ_OFFLOAD)
+            self.assertEqual(self.settings.SURYA_INFERENCE_PARALLEL, 1)
+            return Mock()
+
+        self.manager_factory.side_effect = create_manager
+        self.predictor.return_value = []
+        with patch.multiple(
+            "src.ocr.ocr_surya",
+            SURYA_LLAMA_DEVICE="cuda",
+            LLAMA_CPP_CUDA_BINARY="cuda-llama-server",
+        ):
+            Ocr_surya().extract_text(str(self.path))
+
+        self.manager_factory.assert_called_once_with(method="llamacpp")
+
+    def test_cuda_requires_its_own_binary(self):
+        self.predictor.return_value = []
+        with patch.multiple(
+            "src.ocr.ocr_surya",
+            SURYA_LLAMA_DEVICE="cuda",
+            LLAMA_CPP_CUDA_BINARY=None,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "LLAMA_CPP_CUDA_BINARY"):
+                Ocr_surya().extract_text(str(self.path))
+        self.manager_factory.assert_not_called()
+
+    def test_invalid_llama_device_is_rejected(self):
+        self.predictor.return_value = []
+        with patch("src.ocr.ocr_surya.SURYA_LLAMA_DEVICE", "vulkan"):
+            with self.assertRaisesRegex(ValueError, "cpu.*cuda"):
+                Ocr_surya().extract_text(str(self.path))
+        self.manager_factory.assert_not_called()
 
     def test_heic_decoder_is_registered_before_loading(self):
         heic_path = self.path.with_suffix(".HEIC")
@@ -125,7 +174,10 @@ class SuryaOcrTests(unittest.TestCase):
 
     def test_configured_llama_binary_is_used(self):
         self.predictor.return_value = []
-        with patch("src.ocr.ocr_surya.LLAMA_CPP_BINARY", "configured-llama-server"):
+        with patch(
+            "src.ocr.ocr_surya.LLAMA_CPP_CPU_BINARY",
+            "configured-llama-server",
+        ):
             Ocr_surya().extract_text(str(self.path))
         self.assertEqual(self.settings.LLAMA_CPP_BINARY, "configured-llama-server")
 

@@ -4,33 +4,64 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup
 
-from src.config import LLAMA_CPP_BINARY
+from src.config import (
+    LLAMA_CPP_CPU_BINARY,
+    LLAMA_CPP_CUDA_BINARY,
+    SURYA_LLAMA_DEVICE,
+)
 
 from .ocr_abc import Ocr_operator
 
 
 class Ocr_surya(Ocr_operator):
-    """Extract text from images or PDFs with Surya's multilingual OCR on CPU.
+    """Extract text from images or PDFs with Surya's multilingual OCR.
 
     Spanish is recognized automatically; the current API takes no language
     argument. The predictor is initialized on first extraction and reused.
-    Uses llama.cpp with GPU offloading disabled. Install llama-server as
-    described in README.md. Surya's device settings are process-wide.
+    Uses a CPU or NVIDIA CUDA llama.cpp build according to
+    ``SURYA_LLAMA_DEVICE``. Install both servers as described in README.md.
+    Surya's device settings are process-wide.
     """
 
     @cached_property
     def _recognition_predictor(self):
+        if SURYA_LLAMA_DEVICE not in {"cpu", "cuda"}:
+            raise ValueError(
+                "SURYA_LLAMA_DEVICE must be either 'cpu' or 'cuda', "
+                f"got {SURYA_LLAMA_DEVICE!r}"
+            )
+
+        llama_binary = (
+            LLAMA_CPP_CUDA_BINARY
+            if SURYA_LLAMA_DEVICE == "cuda"
+            else LLAMA_CPP_CPU_BINARY
+        )
+        if not llama_binary:
+            variable = (
+                "LLAMA_CPP_CUDA_BINARY"
+                if SURYA_LLAMA_DEVICE == "cuda"
+                else "LLAMA_CPP_CPU_BINARY (or legacy LLAMA_CPP_BINARY)"
+            )
+            raise RuntimeError(
+                f"{variable} must point to the selected llama-server executable"
+            )
+
         from surya.inference import SuryaInferenceManager
         from surya.recognition import RecognitionPredictor
         from surya.settings import settings
 
         # Set the settings object itself: Surya may already have been imported,
         # in which case changing environment variables would be too late.
+        # Python-side preprocessing remains on CPU. The selected external
+        # llama-server owns model and vision-projector GPU execution.
         settings.TORCH_DEVICE = "cpu"
-        settings.LLAMA_CPP_NGL = 0
-        settings.LLAMA_CPP_NO_MMPROJ_OFFLOAD = True
-        if LLAMA_CPP_BINARY:
-            settings.LLAMA_CPP_BINARY = LLAMA_CPP_BINARY
+        settings.LLAMA_CPP_BINARY = llama_binary
+        if SURYA_LLAMA_DEVICE == "cuda":
+            settings.LLAMA_CPP_NGL = 99
+            settings.LLAMA_CPP_NO_MMPROJ_OFFLOAD = False
+        else:
+            settings.LLAMA_CPP_NGL = 0
+            settings.LLAMA_CPP_NO_MMPROJ_OFFLOAD = True
         if settings.SURYA_INFERENCE_PARALLEL is None:
             settings.SURYA_INFERENCE_PARALLEL = 1
 

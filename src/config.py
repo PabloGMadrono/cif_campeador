@@ -17,3 +17,6 @@ OPENROUTER_OCR_MODEL = os.getenv(
     "OPENROUTER_OCR_MODEL", "qwen/qwen2.5-vl-72b-instruct"
 )
 LLAMA_CPP_BINARY = os.getenv("LLAMA_CPP_BINARY")
+LLAMA_CPP_CPU_BINARY = os.getenv("LLAMA_CPP_CPU_BINARY") or LLAMA_CPP_BINARY
+LLAMA_CPP_CUDA_BINARY = os.getenv("LLAMA_CPP_CUDA_BINARY")
+SURYA_LLAMA_DEVICE = os.getenv("SURYA_LLAMA_DEVICE", "cpu").strip().lower()
