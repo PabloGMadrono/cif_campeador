@@ -6,14 +6,22 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock, patch
 
 from src.ocr.ocr_abc import Ocr_operator
+from src.ocr.evidence import InvoiceEvidence, InvoiceExtraction
+from src.ocr.models import Invoice
 from src.ocr.ocr_surya import Ocr_surya, _html_to_text
 
 
 def block(html, order=0, **flags):
     return SimpleNamespace(
         html=html, reading_order=order,
+        polygon=[[0.0, 0.0], [100.0, 0.0], [100.0, 30.0], [0.0, 30.0]],
+        label="Text",
         error=flags.get("error", False), skipped=flags.get("skipped", False),
     )
+
+
+def page(blocks):
+    return SimpleNamespace(blocks=blocks, image_bbox=[0.0, 0.0, 600.0, 800.0])
 
 
 class SuryaOcrTests(unittest.TestCase):
@@ -64,12 +72,12 @@ class SuryaOcrTests(unittest.TestCase):
 
     def test_spanish_text_reading_order_and_multiple_pages(self):
         self.predictor.return_value = [
-            SimpleNamespace(blocks=[
+            page([
                 block("<p>Importe: 20 &euro;</p>", 1),
                 block("<p>Espa&ntilde;a: <b>acci&oacute;n</b> y niñez</p>", 0),
                 block("Ignore this picture", 2, skipped=True),
             ]),
-            SimpleNamespace(blocks=[block("<p>Segunda página</p>")]),
+            page([block("<p>Segunda página</p>")]),
         ]
         self.assertEqual(
             Ocr_surya().extract_text(str(self.path)),
@@ -91,8 +99,51 @@ class SuryaOcrTests(unittest.TestCase):
             "número\nTotal\nArtículo\tPrecio\nPan\t2 €",
         )
 
+    def test_document_preserves_table_geometry_and_skipped_blocks_across_pages(self):
+        table = block("<table><tr><td>10%</td><td>2,00 €</td></tr></table>", 1)
+        table.label = "Table"
+        table.polygon = [[50., 100.], [200., 100.], [200., 160.], [50., 160.]]
+        self.predictor.return_value = [
+            page([table, block("Logo", 0, skipped=True)]),
+            page([block("<p>Footer</p>")]),
+        ]
+        document = Ocr_surya().extract_document(str(self.path))
+        first, second = document.pages
+        self.assertEqual(first.image_bbox, [0., 0., 600., 800.])
+        self.assertEqual(first.blocks[0].block_id, "p1_b1")
+        self.assertTrue(first.blocks[0].skipped)
+        self.assertEqual(first.blocks[1].html, table.html)
+        self.assertEqual(first.blocks[1].polygon, table.polygon)
+        self.assertEqual(first.blocks[1].label, "Table")
+        self.assertEqual(first.blocks[1].text, "10%\t2,00 €")
+        self.assertEqual(second.blocks[0].block_id, "p2_b1")
+        self.assertEqual(document.text, "10%\t2,00 €\n\nFooter")
+
+    def test_public_invoice_and_evidence_paths_use_one_ocr_pass_each(self):
+        self.predictor.return_value = [page([block("Nothing identified")])]
+        ocr = Ocr_surya()
+        ocr._parse_structured = Mock(return_value=InvoiceEvidence.empty())
+        with patch.object(ocr, "extract_text", side_effect=AssertionError("Must retain blocks")):
+            result = ocr.extract_invoice_with_evidence(str(self.path))
+            self.assertIsInstance(result, InvoiceExtraction)
+            self.assertEqual(result.invoice, Invoice.empty())
+            self.predictor.assert_called_once_with(self.images)
+            self.assertEqual(ocr._parse_structured.call_count, 1)
+            self.assertIs(type(ocr.extract_invoice(str(self.path))), Invoice)
+        self.assertEqual(self.predictor.call_count, 2)
+        self.assertEqual(ocr._parse_structured.call_count, 2)
+
+    def test_empty_document_keeps_blocks_and_does_not_parse(self):
+        self.predictor.return_value = [page([block("Picture", skipped=True)])]
+        ocr = Ocr_surya()
+        ocr._parse_structured = Mock(side_effect=AssertionError("No API for empty text"))
+        result = ocr.extract_invoice_with_evidence(str(self.path))
+        self.assertEqual(result.invoice, Invoice.empty())
+        self.assertTrue(result.document.pages[0].blocks[0].skipped)
+        ocr._parse_structured.assert_not_called()
+
     def test_blank_document_and_predictor_reuse(self):
-        self.predictor.return_value = [SimpleNamespace(blocks=[])]
+        self.predictor.return_value = [page([])]
         ocr = Ocr_surya()
         self.factory.assert_not_called()
         self.assertEqual(ocr.extract_text(str(self.path)), "")
@@ -198,7 +249,7 @@ class SuryaOcrTests(unittest.TestCase):
             image.close.assert_called_once()
 
     def test_failed_block_does_not_return_partial_text(self):
-        self.predictor.return_value = [SimpleNamespace(blocks=[
+        self.predictor.return_value = [page([
             block("Texto correcto"), block("", 1, error=True),
         ])]
         with self.assertRaisesRegex(RuntimeError, "page 1"):

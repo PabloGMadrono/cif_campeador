@@ -54,7 +54,7 @@ class InvoiceAccuracyTests(unittest.TestCase):
             for index, (filename, expected) in enumerate(rows, start=1):
                 matched = 0
                 diagnostic = ""
-                actual = score = extraction_error = None
+                actual = score = extraction_error = evidence = None
                 report.start(filename)
                 started = monotonic()
                 try:
@@ -63,7 +63,13 @@ class InvoiceAccuracyTests(unittest.TestCase):
                         raise FileNotFoundError(f"Invoice image not found: {image_path}")
                     # Only the image path crosses the public OCR boundary.
                     with report_progress(filename, index, len(rows)):
-                        actual = invoice_extractor.extract_invoice(str(image_path))
+                        extract_with_evidence = getattr(invoice_extractor, "extract_invoice_with_evidence", None)
+                        if callable(extract_with_evidence):
+                            extraction = extract_with_evidence(str(image_path))
+                            actual = extraction.invoice
+                            evidence = extraction.model_dump(mode="json")
+                        else:
+                            actual = invoice_extractor.extract_invoice(str(image_path))
                     score = score_invoice(actual, expected)
                     matched = score.matched
                     diagnostic = "; ".join(
@@ -73,7 +79,8 @@ class InvoiceAccuracyTests(unittest.TestCase):
                 except Exception as error:
                     # An execution error scores zero but must not hide later rows.
                     extraction_error = diagnostic = f"{type(error).__name__}: {error}"
-                report.record(filename, actual, score, extraction_error, monotonic() - started)
+                report.record(filename, actual, score, extraction_error, monotonic() - started,
+                              evidence=evidence)
                 matched_total += matched
                 accuracy = matched / fields_per_invoice
                 print(f"{filename}: {matched}/{fields_per_invoice} = {accuracy:.2%}"

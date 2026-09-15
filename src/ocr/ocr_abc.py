@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from functools import cached_property
+from typing import TypeVar
 
 from openai import OpenAI
 from pydantic import ValidationError
@@ -7,6 +8,9 @@ from pydantic import ValidationError
 from src.config import OPENAI_API_KEY
 
 from .models import Invoice
+
+
+ParsedT = TypeVar("ParsedT")
 
 
 INVOICE_LABEL_HINTS = """Spanish invoice and receipt terminology to help recognize
@@ -89,16 +93,22 @@ class Ocr_operator(ABC):
         if not raw_text.strip():
             return Invoice.empty()
 
+        return self._parse_structured(raw_text, INVOICE_INSTRUCTIONS, Invoice)
+
+    def _parse_structured(
+        self, input_text: str, instructions: str, output_type: type[ParsedT],
+    ) -> ParsedT:
+        """Reuse the same client and response checks for text and block parsing."""
         try:
             response = self._client.responses.parse(
-                model="gpt-5-mini",
-                instructions=INVOICE_INSTRUCTIONS,
-                input=[{"role": "user", "content": raw_text}],
-                text_format=Invoice,
+                model="gpt-5.6-luna",
+                instructions=instructions,
+                input=[{"role": "user", "content": input_text}],
+                text_format=output_type,
                 store=False,
             )
         except ValidationError as error:
-            raise RuntimeError("Invoice response does not match the Invoice schema") from error
+            raise RuntimeError("Invoice response does not match the requested schema") from error
         if response.status != "completed":
             raise RuntimeError(f"Invoice response did not complete: {response.status}")
         for output in response.output:
@@ -107,7 +117,7 @@ class Ocr_operator(ABC):
                     if content.type == "refusal":
                         raise RuntimeError("Invoice extraction was refused by the model")
         if response.output_parsed is None:
-            raise RuntimeError("Invoice response did not contain a parsed Invoice")
+            raise RuntimeError("Invoice response did not contain a parsed result")
         return response.output_parsed
 
     @abstractmethod

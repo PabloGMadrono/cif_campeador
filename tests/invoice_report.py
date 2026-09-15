@@ -268,13 +268,14 @@ class ExecutionReport:
         record["started_at"] = now()
         self.save()
 
-    def record(self, filename, actual, score, error, duration):
+    def record(self, filename, actual, score, error, duration, *, evidence=None):
         record = self.records[filename]
         record.update({
             "obtained": asdict(actual) if score is not None else None,
             "matched": score.matched if score is not None else 0,
             "mismatches": list(score.mismatches) if score is not None else list(FIELD_LABELS),
             "error": error, "finished_at": now(), "duration_seconds": duration,
+            "extraction_evidence": evidence,
         })
         record["accuracy_pct"] = 100 * record["matched"] / record["total"]
         record["status"] = "error" if error else (
