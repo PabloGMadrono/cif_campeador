@@ -43,6 +43,15 @@ class InvoiceScoringTests(unittest.TestCase):
         )
         self.assertEqual(score_invoice(actual, self.expected).accuracy, 1)
 
+    def test_text_fields_are_trimmed_and_lowercased_before_comparison(self):
+        actual = replace(
+            self.expected,
+            numero_factura="\t001-02  ",
+            nif_proveedor="  a-123\n",
+            nombre_proveedor="  eXAMPLE   s.L.  ",
+        )
+        self.assertEqual(score_invoice(actual, self.expected).matched, 8)
+
     def test_each_field_is_equal_weight_and_six_of_eight_are_needed(self):
         for count in range(9):
             with self.subTest(correct=count):
