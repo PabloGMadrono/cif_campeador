@@ -2,6 +2,7 @@
 
 import base64
 import json
+import os
 import tempfile
 import unittest
 from dataclasses import asdict, fields
@@ -15,6 +16,7 @@ from mistralai.client import Mistral
 from PIL import Image, UnidentifiedImageError
 from pillow_heif import register_heif_opener
 
+from src.ocr.preprocessing import lossless_pdf
 from src.ocr.models import Invoice
 from src.ocr.ocr_mistral import Ocr_mistral
 from src.ocr.ocr_openai import IMAGE_INVOICE_INSTRUCTIONS
@@ -22,6 +24,9 @@ from src.ocr.ocr_openai import IMAGE_INVOICE_INSTRUCTIONS
 
 class MistralOcrTests(unittest.TestCase):
     def setUp(self):
+        environment = patch.dict(os.environ, OCR_PREPROCESSING="off")
+        environment.start()
+        self.addCleanup(environment.stop)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.path = Path(temporary.name) / "invoice.png"
@@ -60,7 +65,7 @@ class MistralOcrTests(unittest.TestCase):
 
     def test_pdf_sent_intact_and_all_response_pages_joined(self):
         path = self.path.with_suffix(".PDF")
-        content = b"%PDF-1.7\nlocal fixture for transport test"
+        content = lossless_pdf([Image.new("RGB", (100, 200), "white")])
         path.write_bytes(content)
         self.response["pages"].append({"index": 1, "markdown": "Second page", "images": [], "dimensions": None})
         result = self.ocr.extract_text(str(path))
@@ -80,7 +85,7 @@ class MistralOcrTests(unittest.TestCase):
                         first.save(path, save_all=True, append_images=[second] if suffix == ".tiff" else [])
                 self.requests.clear()
                 self.ocr.extract_text(str(path))
-                self.assertEqual(len(self.requests), 2 if suffix == ".tiff" else 1)
+                self.assertEqual(len(self.requests), 1)
 
     def test_invoice_is_annotated_in_one_call_without_shared_parser(self):
         values = asdict(Invoice.empty())
@@ -119,11 +124,13 @@ class MistralOcrTests(unittest.TestCase):
         data = base64.b64decode(document["document_url"].split(",", 1)[1])
         with pdfium.PdfDocument(data) as pdf:
             self.assertEqual(len(pdf), 2)
-            self.assertEqual([pdf.get_page_size(i) for i in range(2)], [(16, 24), (24, 16)])
+            for actual, expected in zip([pdf.get_page_size(i) for i in range(2)], [(7.68, 11.52), (11.52, 7.68)]):
+                for value, target in zip(actual, expected):
+                    self.assertAlmostEqual(value, target, places=4)
 
     def test_invoice_pdf_is_sent_intact(self):
         path = self.path.with_suffix(".pdf")
-        content = b"%PDF-1.7\ntransport fixture"
+        content = lossless_pdf([Image.new("RGB", (100, 200), "white")])
         path.write_bytes(content)
         self.ocr.extract_invoice(str(path))
         self.assertEqual(len(self.requests), 1)

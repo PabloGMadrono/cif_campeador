@@ -1,0 +1,729 @@
+{
+  "schema_version": 1,
+  "coordinate_frame": "EXIF-normalized image; normalized x/(width-1), y/(height-1)",
+  "annotation_method": "Visual manual estimates from original photos, independent of detector output; boundaries approximate (about 1% image extent). Diagnostic labels, not training data. Text envelopes are conservative estimates requiring individual visual crop review.",
+  "images": {
+    "IMG_3309.HEIC": {
+      "intended_document": "Copyrai invoice",
+      "source_sha256": "f3504bc14c797cad8fbcda6a80214c049e9169508f281fc6a707ab542e7f8e30",
+      "polygon_normalized": [
+        [
+          0.044,
+          0.039
+        ],
+        [
+          0.907,
+          0.112
+        ],
+        [
+          0.929,
+          0.898
+        ],
+        [
+          0.002,
+          0.937
+        ]
+      ],
+      "text_extent_normalized": [
+        [
+          0.06958999999999999,
+          0.06645000000000001
+        ],
+        [
+          0.88081,
+          0.13507000000000002
+        ],
+        [
+          0.90149,
+          0.87391
+        ],
+        [
+          0.030110000000000026,
+          0.9105700000000001
+        ]
+      ],
+      "upright_rotation_ccw": 90
+    },
+    "IMG_3310.HEIC": {
+      "intended_document": "Bricomart invoice",
+      "polygon_normalized": [
+        [
+          0.02,
+          0.002
+        ],
+        [
+          0.963,
+          0.066
+        ],
+        [
+          1,
+          0.944
+        ],
+        [
+          0,
+          1
+        ]
+      ],
+      "text_extent_normalized": [
+        [
+          0.04854500000000006,
+          0.03206000000000003
+        ],
+        [
+          0.9349649999999999,
+          0.09222000000000002
+        ],
+        [
+          0.969745,
+          0.9175399999999999
+        ],
+        [
+          0.02974500000000002,
+          0.97018
+        ]
+      ],
+      "upright_rotation_ccw": 90
+    },
+    "IMG_3311.HEIC": {
+      "intended_document": "MediaMarkt invoice",
+      "source_sha256": "9d3ab509ca657df003da4bdbcc1457b574d2acb98044a50199afbd389c656ebf",
+      "polygon_normalized": [
+        [
+          0.018,
+          0.005
+        ],
+        [
+          0.956,
+          0.066
+        ],
+        [
+          0.995,
+          0.959
+        ],
+        [
+          0,
+          0.98
+        ]
+      ],
+      "text_extent_normalized": [
+        [
+          0.046455000000000024,
+          0.03485000000000005
+        ],
+        [
+          0.928175,
+          0.09219000000000005
+        ],
+        [
+          0.9648349999999999,
+          0.9316099999999999
+        ],
+        [
+          0.029535000000000033,
+          0.9513499999999999
+        ]
+      ],
+      "upright_rotation_ccw": 90
+    },
+    "IMG_3312.HEIC": {
+      "intended_document": "Parking receipt on MediaMarkt invoice",
+      "polygon_normalized": [
+        [
+          0.055,
+          0.266
+        ],
+        [
+          0.947,
+          0.246
+        ],
+        [
+          0.973,
+          0.698
+        ],
+        [
+          0.026,
+          0.763
+        ]
+      ],
+      "text_extent_normalized": [
+        [
+          0.08171500000000004,
+          0.279635
+        ],
+        [
+          0.9201949999999999,
+          0.26083500000000004
+        ],
+        [
+          0.9446349999999999,
+          0.685715
+        ],
+        [
+          0.05445500000000003,
+          0.746815
+        ]
+      ],
+      "upright_rotation_ccw": 90
+    },
+    "IMG_3313.HEIC": {
+      "intended_document": "DeBagel 9331 receipt",
+      "polygon_normalized": [
+        [
+          0.08,
+          0.239
+        ],
+        [
+          0.887,
+          0.305
+        ],
+        [
+          0.898,
+          0.756
+        ],
+        [
+          0.031,
+          0.707
+        ]
+      ],
+      "text_extent_normalized": [
+        [
+          0.10364000000000001,
+          0.254765
+        ],
+        [
+          0.86222,
+          0.316805
+        ],
+        [
+          0.87256,
+          0.740745
+        ],
+        [
+          0.057580000000000076,
+          0.694685
+        ]
+      ],
+      "upright_rotation_ccw": 90
+    },
+    "IMG_3314.HEIC": {
+      "intended_document": "Rodilla receipt",
+      "polygon_normalized": [
+        [
+          0,
+          0.261
+        ],
+        [
+          0.927,
+          0.251
+        ],
+        [
+          0.934,
+          0.766
+        ],
+        [
+          0,
+          0.78
+        ]
+      ],
+      "text_extent_normalized": [
+        [
+          0.027915000000000023,
+          0.27621
+        ],
+        [
+          0.899295,
+          0.26681
+        ],
+        [
+          0.905875,
+          0.75091
+        ],
+        [
+          0.027915000000000023,
+          0.76407
+        ]
+      ],
+      "upright_rotation_ccw": 90
+    },
+    "IMG_3315.HEIC": {
+      "intended_document": "DeBagel 9282 receipt",
+      "polygon_normalized": [
+        [
+          0.069,
+          0.19
+        ],
+        [
+          0.956,
+          0.185
+        ],
+        [
+          0.987,
+          0.739
+        ],
+        [
+          0.033,
+          0.717
+        ]
+      ],
+      "text_extent_normalized": [
+        [
+          0.09553500000000004,
+          0.206065
+        ],
+        [
+          0.9293149999999999,
+          0.20136500000000002
+        ],
+        [
+          0.958455,
+          0.7221249999999999
+        ],
+        [
+          0.061695000000000055,
+          0.701445
+        ]
+      ],
+      "upright_rotation_ccw": 90
+    },
+    "IMG_3316.HEIC": {
+      "intended_document": "Pamadi receipt",
+      "polygon_normalized": [
+        [
+          0.053,
+          0.276
+        ],
+        [
+          0.874,
+          0.261
+        ],
+        [
+          0.881,
+          0.707
+        ],
+        [
+          0,
+          0.739
+        ]
+      ],
+      "text_extent_normalized": [
+        [
+          0.07694000000000001,
+          0.289185
+        ],
+        [
+          0.84868,
+          0.275085
+        ],
+        [
+          0.8552599999999999,
+          0.694325
+        ],
+        [
+          0.027120000000000033,
+          0.724405
+        ]
+      ],
+      "upright_rotation_ccw": 90
+    },
+    "IMG_3317.HEIC": {
+      "intended_document": "Areas Hospital La Paz receipt",
+      "polygon_normalized": [
+        [
+          0.104,
+          0.261
+        ],
+        [
+          0.874,
+          0.215
+        ],
+        [
+          0.87,
+          0.729
+        ],
+        [
+          0.1,
+          0.717
+        ]
+      ],
+      "text_extent_normalized": [
+        [
+          0.12697999999999998,
+          0.27417
+        ],
+        [
+          0.85078,
+          0.23093
+        ],
+        [
+          0.84702,
+          0.71409
+        ],
+        [
+          0.12322,
+          0.7028099999999999
+        ]
+      ],
+      "upright_rotation_ccw": 270
+    },
+    "IMG_3318.HEIC": {
+      "intended_document": "Areas airport receipt",
+      "polygon_normalized": [
+        [
+          0.172,
+          0.1
+        ],
+        [
+          0.64,
+          0.112
+        ],
+        [
+          0.727,
+          0.912
+        ],
+        [
+          0.153,
+          0.963
+        ]
+      ],
+      "text_extent_normalized": [
+        [
+          0.18706,
+          0.125305
+        ],
+        [
+          0.62698,
+          0.136585
+        ],
+        [
+          0.70876,
+          0.888585
+        ],
+        [
+          0.16920000000000002,
+          0.9365249999999999
+        ]
+      ],
+      "upright_rotation_ccw": 0
+    },
+    "IMG_3319.HEIC": {
+      "intended_document": "Carrefour receipt",
+      "polygon_normalized": [
+        [
+          0.338,
+          0.032
+        ],
+        [
+          0.682,
+          0.051
+        ],
+        [
+          0.714,
+          0.951
+        ],
+        [
+          0.305,
+          0.954
+        ]
+      ],
+      "text_extent_normalized": [
+        [
+          0.34830500000000003,
+          0.059900000000000064
+        ],
+        [
+          0.6716650000000001,
+          0.07776
+        ],
+        [
+          0.701745,
+          0.9237599999999999
+        ],
+        [
+          0.31728500000000004,
+          0.92658
+        ]
+      ],
+      "upright_rotation_ccw": 0
+    },
+    "IMG_3320.HEIC": {
+      "intended_document": "Can Rigo receipt",
+      "polygon_normalized": [
+        [
+          0.188,
+          0.093
+        ],
+        [
+          0.591,
+          0.078
+        ],
+        [
+          0.633,
+          0.878
+        ],
+        [
+          0.182,
+          0.912
+        ]
+      ],
+      "text_extent_normalized": [
+        [
+          0.20063,
+          0.11683499999999997
+        ],
+        [
+          0.57945,
+          0.10273500000000002
+        ],
+        [
+          0.61893,
+          0.854735
+        ],
+        [
+          0.19499,
+          0.886695
+        ]
+      ],
+      "upright_rotation_ccw": 0
+    },
+    "IMG_3321.HEIC": {
+      "intended_document": "Coquetier receipt",
+      "polygon_normalized": [
+        [
+          0.218,
+          0.134
+        ],
+        [
+          0.825,
+          0.161
+        ],
+        [
+          0.841,
+          0.844
+        ],
+        [
+          0.175,
+          0.863
+        ]
+      ],
+      "text_extent_normalized": [
+        [
+          0.235805,
+          0.15599000000000002
+        ],
+        [
+          0.8063849999999999,
+          0.18137000000000003
+        ],
+        [
+          0.821425,
+          0.82339
+        ],
+        [
+          0.19538500000000003,
+          0.8412499999999999
+        ]
+      ],
+      "upright_rotation_ccw": 0
+    },
+    "IMG_3322.HEIC": {
+      "intended_document": "Faint Can Rigo receipt",
+      "polygon_normalized": [
+        [
+          0.36,
+          0
+        ],
+        [
+          0.708,
+          0.022
+        ],
+        [
+          0.734,
+          0.976
+        ],
+        [
+          0.334,
+          0.99
+        ]
+      ],
+      "text_extent_normalized": [
+        [
+          0.37044,
+          0.029820000000000013
+        ],
+        [
+          0.69756,
+          0.050500000000000045
+        ],
+        [
+          0.722,
+          0.94726
+        ],
+        [
+          0.34600000000000003,
+          0.9604199999999999
+        ]
+      ],
+      "upright_rotation_ccw": 0
+    },
+    "IMG_3323.HEIC": {
+      "intended_document": "McDonalds receipt, right-hand document",
+      "polygon_normalized": [
+        [
+          0.37,
+          0.02
+        ],
+        [
+          0.737,
+          0
+        ],
+        [
+          0.766,
+          1
+        ],
+        [
+          0.331,
+          1
+        ]
+      ],
+      "text_extent_normalized": [
+        [
+          0.38086,
+          0.04910000000000003
+        ],
+        [
+          0.72584,
+          0.03030000000000005
+        ],
+        [
+          0.7531,
+          0.9702999999999999
+        ],
+        [
+          0.34420000000000006,
+          0.9702999999999999
+        ]
+      ],
+      "upright_rotation_ccw": 0
+    },
+    "IMG_3324.HEIC": {
+      "intended_document": "Diablito receipt",
+      "polygon_normalized": [
+        [
+          0.192,
+          0.068
+        ],
+        [
+          0.74,
+          0.122
+        ],
+        [
+          0.756,
+          0.917
+        ],
+        [
+          0.149,
+          0.929
+        ]
+      ],
+      "text_extent_normalized": [
+        [
+          0.20803500000000003,
+          0.09446000000000004
+        ],
+        [
+          0.723155,
+          0.14522000000000002
+        ],
+        [
+          0.7381949999999999,
+          0.89252
+        ],
+        [
+          0.16761499999999996,
+          0.9038
+        ]
+      ],
+      "upright_rotation_ccw": 0
+    },
+    "IMG_3325.HEIC": {
+      "intended_document": "Spai Natural receipt",
+      "polygon_normalized": [
+        [
+          0.282,
+          0.129
+        ],
+        [
+          0.792,
+          0.078
+        ],
+        [
+          0.75,
+          0.917
+        ],
+        [
+          0.234,
+          0.914
+        ]
+      ],
+      "text_extent_normalized": [
+        [
+          0.29595,
+          0.15183000000000002
+        ],
+        [
+          0.77535,
+          0.10389000000000004
+        ],
+        [
+          0.73587,
+          0.89255
+        ],
+        [
+          0.25083,
+          0.88973
+        ]
+      ],
+      "upright_rotation_ccw": 0
+    },
+    "IMG_3326.HEIC": {
+      "intended_document": "BBVA payment slip",
+      "polygon_normalized": [
+        [
+          0.25,
+          0.093
+        ],
+        [
+          0.847,
+          0.107
+        ],
+        [
+          0.877,
+          0.88
+        ],
+        [
+          0.195,
+          0.876
+        ]
+      ],
+      "text_extent_normalized": [
+        [
+          0.267535,
+          0.11675999999999997
+        ],
+        [
+          0.828715,
+          0.12991999999999998
+        ],
+        [
+          0.856915,
+          0.85654
+        ],
+        [
+          0.215835,
+          0.85278
+        ]
+      ],
+      "upright_rotation_ccw": 0
+    }
+  }
+}

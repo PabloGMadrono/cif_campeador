@@ -10,6 +10,7 @@ const script = template.match(/<script>\s*([\s\S]*?)<\/script>/)[1];
 
 function dashboard(persisted = new Map(), blocked = false) {
   const nodes = new Map();
+  const session = new Map();
   const get = id => {
     if (!nodes.has(id)) nodes.set(id, {
       hidden: ['run-editor', 'rename-message'].includes(id), value: '', checked: true,
@@ -42,7 +43,7 @@ function dashboard(persisted = new Map(), blocked = false) {
     document: {getElementById: get, querySelectorAll() { return []; }},
     location: {hash: '', pathname: '/reports/dashboard.html', reload() {}},
     history: {replaceState() {}}, URLSearchParams,
-    sessionStorage: {getItem() { return null; }, setItem() {}},
+    sessionStorage: {getItem(key) { return session.get(key) || null; }, setItem(key, value) { session.set(key, String(value)); }},
     localStorage: {
       getItem: key => persisted.get(key) || null,
       setItem(key, value) { if (blocked) throw Error('Storage blocked'); persisted.set(key, value); },
@@ -72,6 +73,33 @@ test('manual verdicts update every score view and survive reload', () => {
   page.evaluate("setFieldReview('first','one.png','f3','wrong');render();");
   assert.equal(page.evaluate('summary().accuracy'), 62.5);
   assert.equal(page.evaluate('run.invoices[0].status'), 'failed');
+});
+
+test('prepared view and page selector preserve original previews and diagnostics', () => {
+  const page = dashboard();
+  page.evaluate(`run.invoices[0].preprocessing={config:{mode:'full'},duration_seconds:1.25,cache_hit:false,pages:[
+    {original_preview:'original-1.jpg',prepared_preview:'prepared-1.jpg',rotation_ccw:90,selection_method:'opencv',uncertainty:['fallback_selection']},
+    {original_preview:'original-2.jpg',prepared_preview:'prepared-2.jpg',rotation_ccw:0,selection_method:'docaligner',uncertainty:[]}
+  ]};renderDetail();`);
+  assert.match(page.get('detail').innerHTML, /src="prepared-1.jpg"/);
+  assert.match(page.get('detail').innerHTML, /fallback_selection/);
+  page.get('prepared-view').onchange({target:{value:'original'}});
+  assert.match(page.get('detail').innerHTML, /src="original-1.jpg"/);
+  page.get('prepared-page').onchange({target:{value:'1'}});
+  assert.match(page.get('detail').innerHTML, /src="original-2.jpg"/);
+  page.get('prepared-view').onchange({target:{value:'prepared'}});
+  assert.match(page.get('detail').innerHTML, /src="prepared-2.jpg"/);
+  assert.equal(page.evaluate('run.invoices[0].image'), null);
+});
+
+test('off mode is explicit so identical original and prepared images are explained', () => {
+  const page = dashboard();
+  page.evaluate(`run.invoices[0].preprocessing={config:{mode:'off'},duration_seconds:0.2,cache_hit:true,pages:[
+    {original_preview:'same.jpg',prepared_preview:'same.jpg',rotation_ccw:0,selection_method:'full_page',uncertainty:[]}
+  ]};renderSummary();renderDetail();`);
+  assert.match(page.get('notice').textContent, /Preprocessing: off/);
+  assert.match(page.get('notice').textContent, /same decoded pixels/);
+  assert.match(page.get('detail').innerHTML, /Preprocessing OFF/);
 });
 
 test('Auto restores original scoring and review isolation by run and field', () => {

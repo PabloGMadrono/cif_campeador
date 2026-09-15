@@ -38,6 +38,21 @@ class InvoiceReportTests(unittest.TestCase):
         with path.open(encoding="utf-8-sig", newline="") as source:
             return list(csv.DictReader(source))
 
+    def test_preparation_previews_survive_cache_removal_and_extraction_errors(self):
+        from src.ocr.preprocessing import PreprocessingConfig, prepare_document
+        document = prepare_document(self.images / "one.png", PreprocessingConfig(cache_dir=str(self.root / "cache")))
+        with ExecutionReport(self.rows, self.images, self.output, "example.Extractor") as report:
+            report.record("one.png", None, None, "OCR failed", 1, prepared=document)
+            saved = json.loads((report.run_directory / "run.json").read_text())
+            page = saved["invoices"][0]["preprocessing"]["pages"][0]
+            for kind in ("original", "prepared"):
+                preview = self.output / page[kind + "_preview"]
+                self.assertTrue(preview.is_file())
+                with Image.open(preview) as image:
+                    self.assertEqual(image.size, (100, 160))
+            self.assertEqual(page["matrix"], [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]])
+            self.assertIn("OCR failed", saved["invoices"][0]["error"])
+
     def test_snapshots_and_csv_preserve_matches_values_and_errors(self):
         with ExecutionReport(self.rows, self.images, self.output, "example.Extractor") as report:
             report.start("one.png")
@@ -116,6 +131,27 @@ class InvoiceReportTests(unittest.TestCase):
         self.assertEqual(preview["status"], "ready")
         self.assertTrue(all(row["obtained"] is None for row in preview["invoices"]))
         self.assertTrue(all(row["accuracy_pct"] is None for row in preview["invoices"]))
+
+    def test_evidence_survives_refresh_and_block_html_cannot_escape_dashboard(self):
+        dangerous = '</script><script>alert("block")</script>'
+        evidence = {
+            "document": {"pages": [{"page_number": 1, "blocks": [{
+                "block_id": "p1_b1", "html": dangerous, "text": "CIF B1234",
+            }]}]},
+            "evidence": {"nif_proveedor": {"value": "B1234", "sources": [{
+                "block_id": "p1_b1", "printed_text": "CIF B1234",
+            }]}},
+        }
+        with ExecutionReport(self.rows[:1], self.images, self.output, "surya") as report:
+            report.start("one.png")
+            report.record("one.png", self.expected, score_invoice(self.expected, self.expected),
+                          None, 1, evidence=evidence)
+        self.assertTrue(refresh_reports(self.output))
+        saved = json.loads((report.run_directory / "run.json").read_text())
+        self.assertEqual(saved["invoices"][0]["extraction_evidence"], evidence)
+        self.assertEqual(saved["invoices"][0]["matched"], 8)
+        self.assertNotIn(dangerous, (self.output / "dashboard.html").read_text(encoding="utf-8"))
+        self.assertEqual(len(self.read_csv(report.run_directory / "fields.csv")), 8)
 
     def test_missing_image_keeps_a_reportable_record(self):
         with ExecutionReport([("missing.png", self.expected)], self.images, self.output, "example.Extractor") as report:

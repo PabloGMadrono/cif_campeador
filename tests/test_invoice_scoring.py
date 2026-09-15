@@ -2,6 +2,7 @@
 
 import contextlib
 import io
+import json
 import os
 import tempfile
 import unittest
@@ -13,6 +14,7 @@ from unittest.mock import Mock, patch
 from pydantic import ValidationError
 
 from src.ocr.models import Invoice
+from src.ocr.evidence import InvoiceEvidence, InvoiceExtraction, OcrDocument
 from tests.invoice_accuracy import (
     PASS_THRESHOLD, image_category, image_index, load_ground_truths, normalize,
     resolve_image, score_invoice,
@@ -40,6 +42,15 @@ class InvoiceScoringTests(unittest.TestCase):
             base_imponible="1117.04", tipo_iva="21", cuota_iva="230.130", total="1347.17",
         )
         self.assertEqual(score_invoice(actual, self.expected).accuracy, 1)
+
+    def test_text_fields_are_trimmed_and_lowercased_before_comparison(self):
+        actual = replace(
+            self.expected,
+            numero_factura="\t001-02  ",
+            nif_proveedor="  a-123\n",
+            nombre_proveedor="  eXAMPLE   s.L.  ",
+        )
+        self.assertEqual(score_invoice(actual, self.expected).matched, 8)
 
     def test_each_field_is_equal_weight_and_six_of_eight_are_needed(self):
         for count in range(9):
@@ -121,6 +132,35 @@ class InvoiceScoringTests(unittest.TestCase):
         self.assertTrue(result.wasSuccessful())
         self.assertEqual(calls, 2)
         self.assertIn("GLOBAL: 16/16 = 100.00%", output)
+
+    def test_benchmark_saves_evidence_without_rerunning_ocr_or_reusing_previous_result(self):
+        extraction = InvoiceExtraction(document=OcrDocument(pages=[]), evidence=InvoiceEvidence.empty())
+        extractor = SimpleNamespace(
+            extract_invoice=Mock(side_effect=AssertionError("No second extraction")),
+            extract_invoice_with_evidence=Mock(side_effect=[extraction, RuntimeError("bad citation")]),
+        )
+        with (
+            tempfile.TemporaryDirectory() as report_directory,
+            patch.object(benchmark, "REPORTS_DIR", Path(report_directory)),
+            patch.object(benchmark, "load_ground_truths", return_value=[
+                ("one.HEIC", Invoice.empty()), ("two.HEIC", Invoice.empty()),
+            ]),
+            patch.object(benchmark, "invoice_extractor", extractor),
+            patch.object(Path, "is_file", return_value=True),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            result = unittest.TestResult()
+            benchmark.InvoiceAccuracyTests("test_trial_invoices").run(result)
+            saved = json.loads(next(Path(report_directory).glob("runs/*/run.json")).read_text())
+            first, second = saved["invoices"]
+            self.assertEqual(first["extraction_evidence"], extraction.model_dump(mode="json"))
+            self.assertEqual(first["matched"], 8)
+            self.assertIsNone(second["extraction_evidence"])
+            self.assertEqual(second["status"], "error")
+            self.assertIn("bad citation", second["error"])
+        self.assertFalse(result.errors)
+        extractor.extract_invoice.assert_not_called()
+        self.assertEqual(extractor.extract_invoice_with_evidence.call_count, 2)
 
     def test_all_real_csv_images_resolve_in_category_folders(self):
         from collections import Counter

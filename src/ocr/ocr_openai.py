@@ -1,18 +1,16 @@
 """Read invoice images directly into structured output with the Responses API."""
 
 import argparse
-import base64
 import json
 from dataclasses import asdict
-from io import BytesIO
-from pathlib import Path
 from typing import TypeVar
 
-from PIL import Image, ImageOps, ImageSequence
+from PIL import Image
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .models import Invoice
 from .ocr_abc import INVOICE_FIELD_INSTRUCTIONS, INVOICE_LABEL_HINTS, Ocr_operator
+from .preprocessing import prepare_document, image_data_url
 
 
 IMAGE_INVOICE_INSTRUCTIONS = (
@@ -89,50 +87,14 @@ class Ocr_openai(Ocr_operator):
 
 
 def _document_image_urls(path: str) -> list[str]:
-    """Decode all pages before contacting the API; close local image resources."""
-    file_path = Path(path)
-    if not file_path.exists():
-        raise FileNotFoundError(f"Document not found: {file_path}")
-    if not file_path.is_file():
-        raise IsADirectoryError(f"Expected a document file: {file_path}")
-
-    if file_path.suffix.lower() == ".pdf":
-        import pypdfium2 as pdfium
-
-        urls = []
-        with pdfium.PdfDocument(str(file_path)) as document:
-            for index in range(len(document)):
-                page = document[index]
-                try:
-                    bitmap = page.render(scale=2)  # 144 DPI.
-                    try:
-                        with bitmap.to_pil() as image:
-                            urls.append(_image_data_url(image))
-                    finally:
-                        bitmap.close()
-                finally:
-                    page.close()
-        return urls
-
-    if file_path.suffix.lower() in {".heic", ".heif"}:
-        from pillow_heif import register_heif_opener
-
-        register_heif_opener(thumbnails=False)
-
-    with Image.open(file_path) as document:
-        return [_image_data_url(page) for page in ImageSequence.Iterator(document)]
+    """Prepare exactly once, then encode identical shared pixels for all pages."""
+    prepared = prepare_document(path)
+    with prepared.images() as images:
+        return [image_data_url(image) for image in images]
 
 
 def _image_data_url(image: Image.Image) -> str:
-    with ImageOps.exif_transpose(image) as oriented:
-        with oriented.convert("RGBA") as rgba:
-            with Image.new("RGB", rgba.size, "white") as rgb:
-                with rgba.getchannel("A") as alpha:
-                    rgb.paste(rgba, mask=alpha)
-                with BytesIO() as buffer:
-                    rgb.save(buffer, format="PNG")
-                    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
-    return f"data:image/png;base64,{encoded}"
+    return image_data_url(image)
 
 
 def main() -> None:

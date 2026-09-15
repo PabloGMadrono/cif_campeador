@@ -1,11 +1,16 @@
 # OCR backends
 
+All backends now use [shared local preprocessing](../../docs/ocr_preprocessing.md).
+Install the new requirements and run `python -m src.ocr.preprocessing --setup-models`
+before using `OCR_PREPROCESSING=orientation` or `full`. The default is `off`
+until crop validation passes. Prepared/original previews are identical in off mode.
+
 All invoice extraction paths share Spanish invoice/receipt terminology for
 invoice numbers, supplier tax IDs (CIF/NIF/DNI/NIE/VAT) and legal names, including
 company suffixes and individual suppliers. Supplier tax IDs take priority over
 commercial names; ambiguous operation/reference numbers need document context.
 The glossary also guides Qwen and OpenAI text transcription without changing
-printed labels or omitting other text. Surya uses it in the shared invoice parser;
+printed labels or omitting other text. Surya uses it in the invoice block parser;
 its local recognition predictor does not accept this prompt.
 
 When several VAT rates are printed without a single overall rate, the shared
@@ -31,10 +36,11 @@ text = ocr.extract_text("documento.pdf")
 invoice = ocr.extract_invoice("factura.HEIC")
 ```
 
-PDFs are submitted as base64 PDF documents in one call. Images are converted
-to PNG with camera orientation applied and transparency composited onto white;
-HEIC/HEIF and multipage TIFFs are supported. Each image frame gets a separate
-request. `extract_text` returns page Markdown joined with blank lines, retaining
+PDFs are submitted intact only when preprocessing is off. Otherwise the shared
+stage renders and prepares them. A single prepared image is sent as PNG;
+multiple pages are combined in a lossless raster PDF for one request.
+HEIC/HEIF and multipage TIFFs are supported.
+`extract_text` returns page Markdown joined with blank lines, retaining
 inline tables. Returned image base64 data is not embedded in the text or saved.
 Encoded documents are held in memory and must fit Mistral's request limits.
 
@@ -47,10 +53,9 @@ Both extraction methods only require `MISTRAL_API_KEY`; invoice extraction
 does not call the shared OpenAI parser. Explicit calls to the inherited
 `parse_invoice(raw_text)` still use OpenAI and require `OPENAI_API_KEY`.
 
-For invoice annotations, PDFs are sent intact and a single image is sent as PNG.
-Multipage images are packaged into one PDF in frame order (144 DPI, JPEG quality
-95), so annotation sees the whole invoice in one request. This conversion uses
-lossy image compression. Text extraction retains its separate per-frame calls.
+Multipage images are packaged into one PDF in frame order at the configured DPI
+(default 300), with lossless RGB compression. Both extraction methods use this
+document-wide transport.
 
 An annotation with all eight fields null returns an empty Invoice. Missing,
 malformed or schema-invalid annotations raise `RuntimeError`; there is no parser
@@ -91,7 +96,8 @@ python -m src.ocr.ocr_openai "tests/images/trial_invoices/IMG_3309.HEIC"
 
 The CLI prints the invoice as JSON. Local images are converted to PNG, with
 camera orientation applied and transparent backgrounds composited onto white.
-HEIC/HEIF and multipage TIFFs are supported. PDFs are rendered locally at 144 DPI.
+HEIC/HEIF and multipage TIFFs are supported. PDFs are rendered locally at 300 DPI
+by default (`OCR_PDF_DPI` can override it).
 All pages are sent in order in the same request as `input_image` items, using
 `image_url="data:image/png;base64,..."` and `detail="high"`. No file upload or
 public image URL is required. Encoded pages are held in memory for the request;
@@ -127,7 +133,8 @@ client pointed at OpenRouter. It follows the vision API approach in the
 [Qwen2.5-VL walkthrough](https://medium.com/@tententgc/extracting-invoice-data-with-qwen2-5-vl-and-openrouter-an-ocr-walkthrough-in-python-7b5490578cad).
 To fit the shared interface, it requests JSON containing a `text` transcription
 and returns that field as plain text. Invoice structuring remains in the base
-class, using the same schema and parser as Surya.
+class's text-only parser; Surya instead supplies structured blocks and requests
+source evidence before mapping the result to the same public Invoice schema.
 
 Install `requirements.txt` and set these values in your environment or project
 `.env` (existing environment variables take precedence):
@@ -158,9 +165,10 @@ python -m src.ocr.ocr_qwen "tests/images/trial_invoices/IMG_3309.HEIC"
 
 Images, including HEIC/HEIF and multipage TIFFs, are decoded with Pillow;
 camera orientation is applied and transparency is composited onto white.
-PDFs are rendered locally at 144 DPI with PDFium. Each page is sent as a PNG
+PDFs are rendered locally at 300 DPI by default with PDFium. Each page is sent as a PNG
 data URL in a separate OpenRouter request, and page texts are joined with blank
-lines. This backend needs no local model weights or llama.cpp server.
+lines. Enabled preprocessing needs its two local models; Qwen recognition needs
+no local weights or llama.cpp server.
 
 Text extraction sends document images to OpenRouter and its model provider.
 `extract_invoice` additionally sends the resulting text to the shared OpenAI
@@ -254,6 +262,62 @@ Spanish is recognized automatically. Results are plain Unicode text, with
 newlines between blocks, tabs between table cells, and blank lines between PDF
 pages. Reuse the same instance for subsequent documents.
 
+### Surya invoice extraction with source evidence
+
+`extract_invoice(path)` now preserves Surya's page and block structure for the
+GPT-5-mini parsing step, and still returns the same eight-field `Invoice`.
+It performs one Surya OCR pass and one structured Responses call. The parser
+receives each block's stable document-local ID, pixel polygon, layout label,
+reading order, original HTML and plain text, together with page bounds.
+Skipped blocks are retained as diagnostics and cannot be cited as evidence.
+Block errors still fail extraction; images are closed even when inference fails.
+
+The parser returns a value, status (`printed`, `derived`, `missing`, or
+`unreadable`) and source quotes for each field. Every non-null value must cite
+existing readable blocks. Local validation checks quoted text against those
+blocks, tolerating whitespace and Unicode composition differences. Only the
+effective VAT rate may be marked derived, with all contributing VAT rows cited.
+These checks validate the references, not the correctness of the OCR, the chosen
+supplier/document, or the arithmetic. Coordinates describe the decoded image;
+they do not automatically orient or isolate overlapping receipts.
+
+Use the explicit evidence API when you want to inspect or save the full result:
+
+```python
+from pathlib import Path
+from src.ocr.ocr_surya import Ocr_surya
+
+ocr = Ocr_surya()
+result = ocr.extract_invoice_with_evidence("factura.HEIC")
+invoice = result.invoice
+print(result.evidence.nif_proveedor.sources)
+Path("invoice-evidence.json").write_text(result.model_dump_json(indent=2), encoding="utf-8")
+```
+
+`extract_document(path)` exposes the OCR blocks without contacting OpenAI.
+`parse_document(document)` parses those blocks without running Surya again.
+You can save `document.model_dump_json()` and reload it with
+`OcrDocument.model_validate_json(...)` from `src.ocr.evidence` to compare parser
+changes against identical OCR input. `extract_text(path)` retains its existing
+plain-text interface; explicit `parse_invoice(text)` uses the inherited text
+parser. Empty usable OCR text produces an empty Invoice without an API call.
+Invalid schemas, missing citations, unknown/skipped source blocks and fabricated
+quotes raise errors. Automatic crop rereads are not implemented in this change.
+
+The accuracy benchmark uses `extract_invoice_with_evidence` when available and
+saves successful extraction blocks and field citations under each invoice's
+`extraction_evidence` in `runs/<execution-id>/run.json`. Scoring still uses only
+the eight public Invoice values. Other backends and older runs have no evidence;
+the dashboard and CSV scores remain compatible. Evidence is available in JSON,
+not rendered as HTML in the dashboard. Ordinary `extract_invoice` calls do not
+write files or keep mutable last-result state on the shared extractor.
+
+Run the offline block/evidence and adapter checks with:
+
+```shell
+python -m unittest tests.test_ocr_surya tests.test_ocr_evidence tests.test_ocr_abc -v
+```
+
 To OCR the included trial invoice and print it directly in PowerShell, run
 this from the repository root:
 
@@ -271,7 +335,8 @@ python -m unittest tests.test_invoice_accuracy -v
 
 It reads every row of `tests/ground_truths/ground_truth_trial_invoices.csv`
 and passes the corresponding image from `tests/images/trial_invoices` to
-`extract_invoice(path)`. Implementations must return the shared `Invoice`
+`extract_invoice(path)`, or the evidence API described above. The scored result
+must be the shared `Invoice`
 Pydantic dataclass in `src/ocr/models.py`, with the eight CSV fields excluding
 `Nombre foto` and `Notas`. Python field names carry the original CSV headers
 as dataclass metadata. Supply every field using strings for values, or `None`
@@ -279,7 +344,7 @@ for absent fields. `Invoice.empty()` creates an invoice with all fields null.
 Pydantic rejects incorrect types, missing fields and extra fields.
 
 Each OCR implementation implements `extract_text(path)`. The base class supplies
-two concrete methods; direct vision backends can override `extract_invoice`:
+two concrete methods; Surya and direct vision backends override `extract_invoice`:
 
 - `extract_invoice(path) -> Invoice`: runs OCR and passes its raw text to
   `parse_invoice`.
@@ -294,8 +359,9 @@ API keys and the llama.cpp runtime selection for the OCR modules to import. Exis
 environment variables take precedence; restart the process after changing
 configuration. The OpenAI client is a cached property, created on first use
 and reused without a constructor or a manual initialization check. Plain
-text OCR with Surya does not require an API key. Only raw OCR text is sent to OpenAI, with
-response storage disabled; the CSV reference data stays in the tests.
+text OCR with Surya does not require an API key. Surya sends OCR text/HTML and
+block geometry to OpenAI; the base parser sends raw text. Both disable response
+storage. The CSV reference data stays in the tests.
 
 Empty OCR text returns an empty Invoice without an API call. Unknown fields are
 null. API errors propagate; refusals, incomplete responses and invalid payloads

@@ -268,19 +268,40 @@ class ExecutionReport:
         record["started_at"] = now()
         self.save()
 
-    def record(self, filename, actual, score, error, duration):
+    def record(self, filename, actual, score, error, duration, *, evidence=None, prepared=None):
         record = self.records[filename]
+        if prepared is not None:
+            record["preprocessing"] = self.save_preparation(filename, prepared)
         record.update({
             "obtained": asdict(actual) if score is not None else None,
             "matched": score.matched if score is not None else 0,
             "mismatches": list(score.mismatches) if score is not None else list(FIELD_LABELS),
             "error": error, "finished_at": now(), "duration_seconds": duration,
+            "extraction_evidence": evidence,
         })
         record["accuracy_pct"] = 100 * record["matched"] / record["total"]
         record["status"] = "error" if error else (
             "passed" if record["matched"] / record["total"] > PASS_THRESHOLD else "failed"
         )
         self.save()
+
+    def save_preparation(self, filename, document):
+        """Portable previews of every page, plus full geometry and diagnostics."""
+        from PIL import Image
+
+        metadata = document.metadata()
+        metadata["pages"] = [dict(page) for page in metadata["pages"]]
+        index = list(self.records).index(filename) + 1
+        for page, page_data in zip(document.pages, metadata["pages"]):
+            for kind, source in (("original", page.original_path), ("prepared", page.image_path)):
+                relative = self.relative / "images" / f"{index:03d}-p{page_data['page_number']:03d}-{kind}.jpg"
+                destination = self.directory / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with Image.open(source) as image:
+                    image.thumbnail((1800, 1800))
+                    image.save(destination, "JPEG", quality=92)
+                page_data[kind + "_preview"] = relative.as_posix()
+        return metadata
 
     def save(self):
         self.data["updated_at"] = now()

@@ -2,6 +2,7 @@
 
 import base64
 import json
+import os
 import tempfile
 import unittest
 from io import BytesIO
@@ -20,6 +21,9 @@ from src.ocr.ocr_qwen import Ocr_qwen
 
 class QwenOcrTests(unittest.TestCase):
     def setUp(self):
+        environment = patch.dict(os.environ, OCR_PREPROCESSING="off")
+        environment.start()
+        self.addCleanup(environment.stop)
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.path = Path(directory.name) / "invoice.png"
@@ -80,8 +84,8 @@ class QwenOcrTests(unittest.TestCase):
             document.save(str(path))
         text = self.ocr.extract_text(str(path))
         self.assertEqual(len(self.requests), 2)
-        self.assertEqual(self.sent_image(0).size, (144, 288))
-        self.assertEqual(self.sent_image(1).size, (288, 144))
+        self.assertEqual(self.sent_image(0).size, (300, 600))
+        self.assertEqual(self.sent_image(1).size, (600, 300))
         self.assertEqual(len(text.split("\n\n")), 2)
 
     def test_multiframe_tiff_preserves_all_pages(self):

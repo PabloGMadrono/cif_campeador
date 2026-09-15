@@ -81,7 +81,9 @@ def normalize(name: str, value: str | None):
         return ""
     if not isinstance(value, str):
         raise TypeError(f"{name} must be str or None")
-    value = " ".join(unicodedata.normalize("NFC", value).split())
+    # Comparison starts from trimmed, case-insensitive text for every field.
+    # casefold() includes lowercasing and handles Unicode more consistently.
+    value = " ".join(unicodedata.normalize("NFC", value).casefold().split())
     if not value:
         return ""
     if name == "fecha":
@@ -101,7 +103,7 @@ def normalize(name: str, value: str | None):
             raise ValueError(f"Invalid numeric field {name}: {value!r}")
         return Decimal(value)
     # Keep punctuation, accents and leading zeroes meaningful.
-    return value.casefold()
+    return value
 
 
 @dataclass(frozen=True)

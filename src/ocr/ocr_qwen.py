@@ -1,18 +1,16 @@
 """Qwen2.5-VL OCR through OpenRouter, using the shared invoice parsing flow."""
 
 import argparse
-import base64
 import json
 from functools import cached_property
-from io import BytesIO
-from pathlib import Path
 
 from openai import OpenAI
-from PIL import Image, ImageOps, ImageSequence
+from PIL import Image
 
 from src.config import OPENROUTER_API_KEY, OPENROUTER_OCR_MODEL
 
 from .ocr_abc import INVOICE_LABEL_HINTS, Ocr_operator
+from .preprocessing import prepare_document, image_data_url
 
 
 OCR_INSTRUCTIONS = """Transcribe all visible text on this document page in reading
@@ -52,54 +50,15 @@ class Ocr_qwen(Ocr_operator):
         File, decoding and API errors propagate. Refused, incomplete or malformed
         responses raise RuntimeError instead of returning partial OCR text.
         """
-        file_path = Path(path)
-        if not file_path.exists():
-            raise FileNotFoundError(f"Document not found: {file_path}")
-        if not file_path.is_file():
-            raise IsADirectoryError(f"Expected a document file: {file_path}")
-
-        if file_path.suffix.lower() == ".pdf":
-            return self._extract_pdf(file_path)
-
-        if file_path.suffix.lower() in {".heic", ".heif"}:
-            from pillow_heif import register_heif_opener
-
-            register_heif_opener(thumbnails=False)
-
-        with Image.open(file_path) as document:
+        prepared = prepare_document(path)
+        with prepared.images() as images:
             return "\n\n".join(
                 self._extract_image(page, page_number)
-                for page_number, page in enumerate(ImageSequence.Iterator(document), 1)
+                for page_number, page in enumerate(images, 1)
             )
 
-    def _extract_pdf(self, path: Path) -> str:
-        import pypdfium2 as pdfium
-
-        pages = []
-        with pdfium.PdfDocument(str(path)) as document:
-            for index in range(len(document)):
-                page = document[index]
-                try:
-                    bitmap = page.render(scale=2)  # 144 DPI, one page in memory.
-                    try:
-                        with bitmap.to_pil() as image:
-                            pages.append(self._extract_image(image, index + 1))
-                    finally:
-                        bitmap.close()
-                finally:
-                    page.close()
-        return "\n\n".join(pages)
-
     def _extract_image(self, image: Image.Image, page_number: int) -> str:
-        # Apply camera orientation and composite transparent scans onto white.
-        with ImageOps.exif_transpose(image) as oriented:
-            with oriented.convert("RGBA") as rgba:
-                with Image.new("RGB", rgba.size, "white") as rgb:
-                    with rgba.getchannel("A") as alpha:
-                        rgb.paste(rgba, mask=alpha)
-                    with BytesIO() as buffer:
-                        rgb.save(buffer, format="PNG")
-                        encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+        url = image_data_url(image)
 
         completion = self._ocr_client.chat.completions.create(
             model=OPENROUTER_OCR_MODEL,
@@ -111,7 +70,7 @@ class Ocr_qwen(Ocr_operator):
                 {"role": "user", "content": [
                     {"type": "text", "text": "Transcribe this document page."},
                     {"type": "image_url", "image_url": {
-                        "url": f"data:image/png;base64,{encoded}",
+                        "url": url,
                     }},
                 ]},
             ],
