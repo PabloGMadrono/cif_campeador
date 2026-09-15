@@ -64,7 +64,7 @@ class SharedInvoiceTests(unittest.TestCase):
         self.assertEqual(len(self.requests), 1)
         path, body = self.requests[0]
         self.assertEqual(path, "/v1/responses")
-        self.assertEqual(body["model"], "gpt-5-mini")
+        self.assertEqual(body["model"], "gpt-5.6-luna")
         self.assertEqual(body["input"], [{
             "role": "user", "content": self.ocr.extract_text("input.HEIC"),
         }])

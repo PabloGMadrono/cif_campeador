@@ -15,3 +15,6 @@ pillow-heif==0.22.0
 # Image decoding and PDF rendering for the OpenRouter OCR backend.
 Pillow>=10.2.0,<11
 pypdfium2>=5.10.1,<6
+onnxruntime==1.22.1
+opencv-python-headless==4.11.0.86
+gdown==5.2.0

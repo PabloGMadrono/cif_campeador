@@ -1,6 +1,7 @@
 import sys
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock, patch
@@ -41,6 +42,18 @@ class SuryaOcrTests(unittest.TestCase):
         self.path.touch()
         self.images = [Mock(), Mock()]
         self.loader = Mock(return_value=(self.images, ["documento", "documento"]))
+        self.prepared = SimpleNamespace(pages=[SimpleNamespace(metadata={}) for _ in self.images])
+        @contextmanager
+        def images():
+            try:
+                yield self.images
+            finally:
+                for image in self.images:
+                    image.close()
+        self.prepared.images = images
+        preparation = patch("src.ocr.ocr_surya.prepare_document", return_value=self.prepared)
+        self.prepare = preparation.start()
+        self.addCleanup(preparation.stop)
         self.predictor = Mock()
         self.factory = Mock(return_value=self.predictor)
         self.manager_factory = Mock()
@@ -83,7 +96,8 @@ class SuryaOcrTests(unittest.TestCase):
             Ocr_surya().extract_text(str(self.path)),
             "España: acción y niñez\nImporte: 20 €\n\nSegunda página",
         )
-        self.loader.assert_called_once_with(str(self.path))
+        self.prepare.assert_called_once_with(str(self.path))
+        self.loader.assert_not_called()
         self.predictor.assert_called_once_with(self.images)
         self.register_heif_opener.assert_not_called()
         for image in self.images:
@@ -120,6 +134,7 @@ class SuryaOcrTests(unittest.TestCase):
         self.assertEqual(document.text, "10%\t2,00 €\n\nFooter")
 
     def test_public_invoice_and_evidence_paths_use_one_ocr_pass_each(self):
+        self.images.pop()
         self.predictor.return_value = [page([block("Nothing identified")])]
         ocr = Ocr_surya()
         ocr._parse_structured = Mock(return_value=InvoiceEvidence.empty())
@@ -134,6 +149,7 @@ class SuryaOcrTests(unittest.TestCase):
         self.assertEqual(ocr._parse_structured.call_count, 2)
 
     def test_empty_document_keeps_blocks_and_does_not_parse(self):
+        self.images.pop()
         self.predictor.return_value = [page([block("Picture", skipped=True)])]
         ocr = Ocr_surya()
         ocr._parse_structured = Mock(side_effect=AssertionError("No API for empty text"))
@@ -143,6 +159,7 @@ class SuryaOcrTests(unittest.TestCase):
         ocr._parse_structured.assert_not_called()
 
     def test_blank_document_and_predictor_reuse(self):
+        self.images.pop()
         self.predictor.return_value = [page([])]
         ocr = Ocr_surya()
         self.factory.assert_not_called()
@@ -161,7 +178,7 @@ class SuryaOcrTests(unittest.TestCase):
             return Mock()
 
         self.manager_factory.side_effect = create_manager
-        self.predictor.return_value = []
+        self.predictor.return_value = [page([]), page([])]
         Ocr_surya().extract_text(str(self.path))
         self.manager_factory.assert_called_once_with(method="llamacpp")
         self.assertEqual(self.settings.LLAMA_CPP_BINARY, "cpu-llama-server")
@@ -177,7 +194,7 @@ class SuryaOcrTests(unittest.TestCase):
             return Mock()
 
         self.manager_factory.side_effect = create_manager
-        self.predictor.return_value = []
+        self.predictor.return_value = [page([]), page([])]
         with patch.multiple(
             "src.ocr.ocr_surya",
             SURYA_LLAMA_DEVICE="cuda",
@@ -188,7 +205,7 @@ class SuryaOcrTests(unittest.TestCase):
         self.manager_factory.assert_called_once_with(method="llamacpp")
 
     def test_cuda_requires_its_own_binary(self):
-        self.predictor.return_value = []
+        self.predictor.return_value = [page([]), page([])]
         with patch.multiple(
             "src.ocr.ocr_surya",
             SURYA_LLAMA_DEVICE="cuda",
@@ -199,32 +216,28 @@ class SuryaOcrTests(unittest.TestCase):
         self.manager_factory.assert_not_called()
 
     def test_invalid_llama_device_is_rejected(self):
-        self.predictor.return_value = []
+        self.predictor.return_value = [page([]), page([])]
         with patch("src.ocr.ocr_surya.SURYA_LLAMA_DEVICE", "vulkan"):
             with self.assertRaisesRegex(ValueError, "cpu.*cuda"):
                 Ocr_surya().extract_text(str(self.path))
         self.manager_factory.assert_not_called()
 
-    def test_heic_decoder_is_registered_before_loading(self):
+    def test_heic_uses_shared_preparation_without_surya_loader(self):
         heic_path = self.path.with_suffix(".HEIC")
         heic_path.touch()
-        self.predictor.return_value = []
-
-        def check_registration(_):
-            self.register_heif_opener.assert_called_once_with(thumbnails=False)
-            return self.images, ["documento"]
-
-        self.loader.side_effect = check_registration
+        self.predictor.return_value = [page([]), page([])]
         Ocr_surya().extract_text(str(heic_path))
+        self.prepare.assert_called_once_with(str(heic_path))
+        self.loader.assert_not_called()
 
     def test_explicit_parallelism_is_preserved(self):
         self.settings.SURYA_INFERENCE_PARALLEL = 2
-        self.predictor.return_value = []
+        self.predictor.return_value = [page([]), page([])]
         Ocr_surya().extract_text(str(self.path))
         self.assertEqual(self.settings.SURYA_INFERENCE_PARALLEL, 2)
 
     def test_configured_llama_binary_is_used(self):
-        self.predictor.return_value = []
+        self.predictor.return_value = [page([]), page([])]
         with patch(
             "src.ocr.ocr_surya.LLAMA_CPP_CPU_BINARY",
             "configured-llama-server",
@@ -249,6 +262,7 @@ class SuryaOcrTests(unittest.TestCase):
             image.close.assert_called_once()
 
     def test_failed_block_does_not_return_partial_text(self):
+        self.images.pop()
         self.predictor.return_value = [page([
             block("Texto correcto"), block("", 1, error=True),
         ])]

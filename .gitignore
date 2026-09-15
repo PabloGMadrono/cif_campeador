@@ -31,6 +31,8 @@ htmlcov/
 
 # Downloaded llama.cpp runtime and release archives
 /.llama_cpp/
+/.ocr_preprocessing/
+/.preprocessing-runtime/
 /llama-*-bin-*.zip
 
 # Generated OCR reports are ignored by tests/results/.gitignore

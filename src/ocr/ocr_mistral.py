@@ -14,7 +14,8 @@ from src.config import MISTRAL_API_KEY
 
 from .models import Invoice
 from .ocr_abc import Ocr_operator
-from .ocr_openai import IMAGE_INVOICE_INSTRUCTIONS, _document_image_urls
+from .ocr_openai import IMAGE_INVOICE_INSTRUCTIONS
+from .preprocessing import prepare_document, image_data_url, lossless_pdf
 
 
 _INVOICE_ADAPTER = TypeAdapter(Invoice)
@@ -66,17 +67,20 @@ class Ocr_mistral(Ocr_operator):
         if not file_path.is_file():
             raise IsADirectoryError(f"Expected a document file: {file_path}")
 
-        if file_path.suffix.lower() == ".pdf":
+        prepared = prepare_document(path)
+        if file_path.suffix.lower() == ".pdf" and prepared.config["mode"] == "off":
             encoded = base64.b64encode(file_path.read_bytes()).decode("ascii")
             documents = [{
                 "type": "document_url",
                 "document_url": f"data:application/pdf;base64,{encoded}",
             }]
         else:
-            documents = [
-                {"type": "image_url", "image_url": url}
-                for url in _document_image_urls(path)
-            ]
+            with prepared.images() as images:
+                if len(images) > 1:
+                    encoded = base64.b64encode(lossless_pdf(images, prepared.config["pdf_dpi"])).decode("ascii")
+                    documents = [{"type": "document_url", "document_url": f"data:application/pdf;base64,{encoded}"}]
+                else:
+                    documents = [{"type": "image_url", "image_url": image_data_url(images[0])}]
         if not documents:
             raise ValueError("Document contains no pages")
         return documents
@@ -109,10 +113,7 @@ def _images_as_pdf(documents: list[dict[str, str]]) -> dict[str, str]:
             data = base64.b64decode(document["image_url"].split(",", 1)[1])
             source = stack.enter_context(Image.open(BytesIO(data)))
             pages.append(stack.enter_context(source.convert("RGB")))
-        with BytesIO() as buffer:
-            pages[0].save(buffer, format="PDF", save_all=True,
-                          append_images=pages[1:], resolution=144.0, quality=95)
-            encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+        encoded = base64.b64encode(lossless_pdf(pages)).decode("ascii")
     return {"type": "document_url", "document_url": f"data:application/pdf;base64,{encoded}"}
 
 

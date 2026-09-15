@@ -1,5 +1,10 @@
 # OCR backends
 
+All backends now use [shared local preprocessing](../../docs/ocr_preprocessing.md).
+Install the new requirements and run `python -m src.ocr.preprocessing --setup-models`
+before using `OCR_PREPROCESSING=orientation` or `full`. The default is `off`
+until crop validation passes. Prepared/original previews are identical in off mode.
+
 All invoice extraction paths share Spanish invoice/receipt terminology for
 invoice numbers, supplier tax IDs (CIF/NIF/DNI/NIE/VAT) and legal names, including
 company suffixes and individual suppliers. Supplier tax IDs take priority over
@@ -31,10 +36,11 @@ text = ocr.extract_text("documento.pdf")
 invoice = ocr.extract_invoice("factura.HEIC")
 ```
 
-PDFs are submitted as base64 PDF documents in one call. Images are converted
-to PNG with camera orientation applied and transparency composited onto white;
-HEIC/HEIF and multipage TIFFs are supported. Each image frame gets a separate
-request. `extract_text` returns page Markdown joined with blank lines, retaining
+PDFs are submitted intact only when preprocessing is off. Otherwise the shared
+stage renders and prepares them. A single prepared image is sent as PNG;
+multiple pages are combined in a lossless raster PDF for one request.
+HEIC/HEIF and multipage TIFFs are supported.
+`extract_text` returns page Markdown joined with blank lines, retaining
 inline tables. Returned image base64 data is not embedded in the text or saved.
 Encoded documents are held in memory and must fit Mistral's request limits.
 
@@ -47,10 +53,9 @@ Both extraction methods only require `MISTRAL_API_KEY`; invoice extraction
 does not call the shared OpenAI parser. Explicit calls to the inherited
 `parse_invoice(raw_text)` still use OpenAI and require `OPENAI_API_KEY`.
 
-For invoice annotations, PDFs are sent intact and a single image is sent as PNG.
-Multipage images are packaged into one PDF in frame order (144 DPI, JPEG quality
-95), so annotation sees the whole invoice in one request. This conversion uses
-lossy image compression. Text extraction retains its separate per-frame calls.
+Multipage images are packaged into one PDF in frame order at the configured DPI
+(default 300), with lossless RGB compression. Both extraction methods use this
+document-wide transport.
 
 An annotation with all eight fields null returns an empty Invoice. Missing,
 malformed or schema-invalid annotations raise `RuntimeError`; there is no parser
@@ -91,7 +96,8 @@ python -m src.ocr.ocr_openai "tests/images/trial_invoices/IMG_3309.HEIC"
 
 The CLI prints the invoice as JSON. Local images are converted to PNG, with
 camera orientation applied and transparent backgrounds composited onto white.
-HEIC/HEIF and multipage TIFFs are supported. PDFs are rendered locally at 144 DPI.
+HEIC/HEIF and multipage TIFFs are supported. PDFs are rendered locally at 300 DPI
+by default (`OCR_PDF_DPI` can override it).
 All pages are sent in order in the same request as `input_image` items, using
 `image_url="data:image/png;base64,..."` and `detail="high"`. No file upload or
 public image URL is required. Encoded pages are held in memory for the request;
@@ -159,9 +165,10 @@ python -m src.ocr.ocr_qwen "tests/images/trial_invoices/IMG_3309.HEIC"
 
 Images, including HEIC/HEIF and multipage TIFFs, are decoded with Pillow;
 camera orientation is applied and transparency is composited onto white.
-PDFs are rendered locally at 144 DPI with PDFium. Each page is sent as a PNG
+PDFs are rendered locally at 300 DPI by default with PDFium. Each page is sent as a PNG
 data URL in a separate OpenRouter request, and page texts are joined with blank
-lines. This backend needs no local model weights or llama.cpp server.
+lines. Enabled preprocessing needs its two local models; Qwen recognition needs
+no local weights or llama.cpp server.
 
 Text extraction sends document images to OpenRouter and its model provider.
 `extract_invoice` additionally sends the resulting text to the shared OpenAI

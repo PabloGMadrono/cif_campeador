@@ -62,7 +62,7 @@ class SuryaEvidenceTests(unittest.TestCase):
         self.assertEqual(result.evidence.nif_proveedor.sources[0].block_id, "p1_b1")
         body = self.requests[0]
         self.assertEqual(len(self.requests), 1)
-        self.assertEqual(body["model"], "gpt-5-mini")
+        self.assertEqual(body["model"], "gpt-5.6-luna")
         self.assertFalse(body["store"])
         self.assertEqual(json.loads(body["input"][0]["content"]), self.document.model_dump())
         self.assertTrue(body["text"]["format"]["strict"])

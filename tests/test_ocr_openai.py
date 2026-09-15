@@ -128,7 +128,7 @@ class OpenAIOcrTests(unittest.TestCase):
             document.save(str(path))
         self.assertEqual(self.ocr.extract_invoice(str(path)), self.expected)
         self.assertEqual(len(self.requests), 1)
-        self.assertEqual([image.size for image in self.sent_images()], [(144, 288), (288, 144)])
+        self.assertEqual([image.size for image in self.sent_images()], [(300, 600), (600, 300)])
 
     def test_all_tiff_frames_are_sent_in_one_call(self):
         path = self.path.with_suffix(".tiff")

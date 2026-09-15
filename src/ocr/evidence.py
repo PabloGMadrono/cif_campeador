@@ -28,6 +28,7 @@ class OcrPage(EvidenceModel):
     page_number: int
     image_bbox: list[float]
     blocks: list[OcrBlock]
+    preprocessing: dict | None = None
 
 
 class OcrDocument(EvidenceModel):
