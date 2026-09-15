@@ -68,11 +68,21 @@ class LocalModels:
         # DocAligner expects BGR / 255, with a full-frame resize to 256 square.
         tensor = cv2.resize(rgb[:, :, ::-1], (256, 256)).transpose(2, 0, 1)[None].astype(np.float32) / 255
         maps = model.run(["heatmap"], {model.get_inputs()[0].name: tensor})[0][0]
-        points, peaks = [], []
-        for heatmap in maps[:4]:
+        points, peaks, recovered = [], [], []
+        for index, heatmap in enumerate(maps[:4]):
             heatmap = cv2.resize(heatmap, (rgb.shape[1], rgb.shape[0]))
-            peaks.append(float(heatmap.max()))
-            heatmap[heatmap < .3] = 0
+            peak = float(heatmap.max())
+            peaks.append(peak)
+            # DocAligner's published threshold is 0.3. A page can still have
+            # three excellent corners and one weak corner at the image edge.
+            # Recover only that corner's dominant component; quad validation
+            # remains responsible for rejecting incoherent geometry.
+            if peak < .1:
+                continue
+            threshold = .3 if peak >= .3 else peak * .7
+            if threshold < .3:
+                recovered.append(index)
+            heatmap[heatmap < threshold] = 0
             mask = (heatmap * 255).astype(np.uint8)
             _, mask = cv2.threshold(mask, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -81,7 +91,8 @@ class LocalModels:
             moments = cv2.moments(max(contours, key=cv2.contourArea))
             if moments["m00"]:
                 points.append([moments["m10"] / moments["m00"], moments["m01"] / moments["m00"]])
-        return points, {"corner_peak_min": min(peaks), "corner_peaks": peaks}
+        return points, {"corner_peak_min": min(peaks), "corner_peaks": peaks,
+                        "recovered_weak_corners": recovered}
 
     def orient(self, rgb):
         model = session("orientation", self.directory, self.threads)

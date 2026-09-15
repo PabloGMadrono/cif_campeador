@@ -41,7 +41,7 @@ process after editing `.env`. Changing mode invalidates the preparation cache.
 The dashboard's Original/Prepared toggle only changes the preview; it cannot
 enable processing or change an already saved run.
 
-Optional settings: `OCR_PDF_DPI` (default 300), `OCR_BOUNDARY_ALLOWANCE` (0.02 of
+Optional settings: `OCR_PDF_DPI` (default 300), `OCR_BOUNDARY_ALLOWANCE` (0.04 of
 the smaller rectified dimension), `OCR_PREPROCESSING_MODELS`, and
 `OCR_PREPROCESSING_CACHE`. By default models/cache live in the ignored
 `.ocr_preprocessing` directory. `PreprocessingConfig` also exposes analysis
@@ -95,14 +95,16 @@ older 144 DPI OpenAI/Qwen runs and Surya's previous loader defaults.
 
 ```shell
 python -m pip install -r requirements-dev.txt
-python -m unittest tests.test_preprocessing tests.test_ocr_surya tests.test_ocr_openai tests.test_ocr_qwen tests.test_ocr_mistral tests.test_invoice_report -v
+python -m unittest tests.test_preprocessing tests.test_preprocessing_dataset -v
 node --test tests/test_invoice_dashboard.cjs
 python -m tests.preprocessing_benchmark --synthetic
 ```
 
 The diagnostic command evaluates off/orientation/full without OCR APIs. It
-saves per-mode `diagnostics.json`, contact sheets and a dashboard with page and
-Original/Prepared controls under `tests/results/preprocessing`. Synthetic tests
+saves per-mode `comparison.html`, `diagnostics.json`, contact sheets and the
+diagnostic dashboard under `tests/results/preprocessing`. `comparison.html`
+places Original and Prepared on the same horizontal row and stacks all documents
+vertically for fast visual review. Synthetic tests
 exercise the real models on known 0/90/180/270 rotations and perspective warps.
 Offline tests independently cover text/image/blank/rotated/multipage PDFs,
 HEIC, TIFF, EXIF, transparency, transform round-trips, cache invalidation and
@@ -117,17 +119,30 @@ outside the output. Full-page baselines can fail isolation while preserving all
 text. These metrics do not replace visual checks of reference-bearing text.
 Invoice reference labels in the existing CSV are unchanged.
 
-Initial full-mode review corrected the upright direction on all 18 photos,
-but found seven isolation/crop failures. Seven used a fallback (three OpenCV,
-four full-page), and nine carried uncertainty flags. Mean cold preparation was
-about 4.1 seconds per image in the validation environment, including decoding
-and saving full-resolution previews; cached preparation was about 0.03 seconds.
+After the large-invoice regression fix, full mode corrected the upright direction
+on all 18 photos. It recorded four document-selection mismatches and one cropped
+text-envelope failure. Three ambiguous stacked-receipt photos retained the full
+page because no safe boundary passed validation; nine cases carried uncertainty
+flags. Mean cold preparation was about 5.4 seconds per image in the validation
+environment, including decoding and saving full-resolution previews; cached
+preparation was about 0.03 seconds.
 Orientation-only got 17/18 directions right (3323 was turned upside down).
 These are preprocessing measurements, not extraction accuracy measurements.
 
-The full-mode crops on 3309, 3311 and 3313 visibly cut text at an edge/footer.
-3312, 3314 and 3315 retain the complete photo after fallback, including background
-documents. 3316 includes neighboring paper. The other individual receipt crops
+The earlier full-mode crops on 3309 and 3311 discarded a weak fourth heatmap
+corner and then used a narrower OpenCV boundary. The regression now recovers the
+dominant weak-corner component when its peak is at least 0.1 and accepts it only
+if the completed quadrilateral passes normal geometry validation. Both images
+now use DocAligner directly, retain their annotated text envelopes, have boundary
+IoU values of 0.987 and 0.955, and apply no residual deskew. The source boundary
+allowance now expands the polygon by 4%; the previous white output margin could
+not recover excluded text. Residual deskew requires at least 1.25 degrees plus
+the existing multi-line consistency checks, so none of the 18 photos is deskewed
+by the current pass.
+
+3313 remains the single conservative text-envelope crop failure. 3312, 3314 and
+3315 retain the complete photo after fallback, including background documents.
+3316 includes neighboring paper. The other individual receipt crops
 retain their visible text in the contact-sheet review, including 3319's long
 footer and faint 3322. This fails the no-clipped-reference-text rollout gate:
 **keep the default off**. Do not infer improved field accuracy from rotations

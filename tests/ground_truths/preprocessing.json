@@ -5,6 +5,7 @@
   "images": {
     "IMG_3309.HEIC": {
       "intended_document": "Copyrai invoice",
+      "source_sha256": "f3504bc14c797cad8fbcda6a80214c049e9169508f281fc6a707ab542e7f8e30",
       "polygon_normalized": [
         [
           0.044,
@@ -85,6 +86,7 @@
     },
     "IMG_3311.HEIC": {
       "intended_document": "MediaMarkt invoice",
+      "source_sha256": "9d3ab509ca657df003da4bdbcc1457b574d2acb98044a50199afbd389c656ebf",
       "polygon_normalized": [
         [
           0.018,

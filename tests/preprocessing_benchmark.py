@@ -5,6 +5,7 @@ python -m tests.preprocessing_benchmark --extract
 """
 
 import argparse
+import html
 import json
 import os
 from dataclasses import replace
@@ -46,9 +47,11 @@ def assess(page, annotation):
     mapped = transform_points(points, page["matrix"])
     ow, oh = page["output_dimensions"]
     contained = bool(((mapped >= [-2, -2]) & (mapped <= [ow + 1, oh + 1])).all())
+    selection_failure = intersection / union < .8
+    clipped = page["selected_polygon"] is not None and not contained
     return {"boundary_iou": float(intersection / union), "text_extent_inside": contained,
             "upright_error_degrees": upright_error, "wrong_rotation": upright_error > 45,
-            "crop_failure": intersection / union < .8 or not contained,
+            "document_selection_failure": bool(selection_failure), "crop_failure": clipped,
             "round_trip_error_pixels": float(np.max(abs(transform_points(mapped, page["inverse_matrix"]) - points)))}
 
 
@@ -68,6 +71,77 @@ def contact_sheets(records, directory):
             draw.text((x + 10, 875), f"{record['page']['selection_method']} | {record['page']['rotation_ccw']} CCW", fill="black")
         sheet.save(directory / f"contact-{start // 3 + 1}.jpg", quality=93)
         sheet.close()
+
+
+def write_comparison_html(records, directory, mode):
+    """Write one vertical list with Original and Prepared side by side."""
+    rows = []
+    for index, record in enumerate(records, 1):
+        page_rows = []
+        for page in record["previews"]:
+            original = html.escape(page["original_preview"], quote=True)
+            prepared = html.escape(page["prepared_preview"], quote=True)
+            page_number = page["page_number"]
+            page_rows.append(f"""
+              <div class="pair">
+                <figure>
+                  <figcaption>Original · page {page_number}</figcaption>
+                  <a href="{original}" target="_blank"><img src="{original}" loading="lazy" alt="Original page {page_number}"></a>
+                </figure>
+                <figure>
+                  <figcaption>Prepared · page {page_number}</figcaption>
+                  <a href="{prepared}" target="_blank"><img src="{prepared}" loading="lazy" alt="Prepared page {page_number}"></a>
+                </figure>
+              </div>""")
+        page = record["page"]
+        assessment = record.get("assessment") or {}
+        flags = ", ".join(page["uncertainty"]) or "none"
+        rows.append(f"""
+          <section class="comparison-row" id="image-{index}">
+            <h2>{index:02d}. {html.escape(record['filename'])}</h2>
+            <p class="metadata">
+              <span>method: {html.escape(page['selection_method'])}</span>
+              <span>rotation: {page['rotation_ccw']}° CCW</span>
+              <span>skew: {page['skew_ccw']:.2f}°</span>
+              <span>text inside: {assessment.get('text_extent_inside', 'not annotated')}</span>
+              <span>uncertainty: {html.escape(flags)}</span>
+            </p>
+            {''.join(page_rows)}
+          </section>""")
+    content = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>OCR preprocessing · {html.escape(mode)}</title>
+  <style>
+    :root {{ color-scheme: light dark; font-family: system-ui, sans-serif; }}
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; background: #e7eaee; color: #17202a; }}
+    header {{ position: sticky; top: 0; z-index: 2; padding: 18px 28px; background: #17202a; color: white; box-shadow: 0 2px 10px #0004; }}
+    header h1 {{ margin: 0 0 5px; font-size: 24px; }}
+    header p {{ margin: 0; color: #cdd5df; }}
+    main {{ width: min(1900px, 100%); margin: auto; padding: 24px; }}
+    .comparison-row {{ margin: 0 0 28px; padding: 20px; border-radius: 12px; background: white; box-shadow: 0 2px 9px #0002; }}
+    h2 {{ margin: 0 0 8px; font-size: 20px; }}
+    .metadata {{ display: flex; flex-wrap: wrap; gap: 7px; margin: 0 0 16px; color: #445; }}
+    .metadata span {{ padding: 4px 8px; border-radius: 5px; background: #eef1f5; }}
+    .pair {{ display: grid; grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr); gap: 18px; align-items: start; overflow-x: auto; }}
+    figure {{ min-width: 0; margin: 0; padding: 10px; border: 1px solid #ccd3dc; border-radius: 8px; background: #f7f8fa; }}
+    figcaption {{ margin-bottom: 9px; font-weight: 700; font-size: 17px; }}
+    img {{ display: block; width: 100%; height: auto; background: #d9dde2; }}
+    @media (max-width: 800px) {{ main {{ padding: 10px; }} header {{ position: static; }} }}
+    @media (prefers-color-scheme: dark) {{ body {{ background: #101418; color: #eef2f6; }} .comparison-row {{ background: #20262d; }} .metadata {{ color: #d4dbe4; }} .metadata span {{ background: #313a44; }} figure {{ background: #171c21; border-color: #46515e; }} }}
+  </style>
+</head>
+<body>
+  <header><h1>Original vs Prepared</h1><p>Mode: {html.escape(mode)} · {len(records)} documents · click an image to open it</p></header>
+  <main>{''.join(rows)}</main>
+</body>
+</html>"""
+    target = directory / "comparison.html"
+    atomic_write(target, content)
+    return target
 
 
 def diagnose(image_directory, directory, config):
@@ -93,13 +167,16 @@ def diagnose(image_directory, directory, config):
                   "processing_seconds": prepared.processing_seconds, "cache_hit": prepared.cache_hit,
                   "source_preserved": file_hash(source) == before,
                   "assessment": assess(page.metadata, annotation) if annotation else None}
+        saved_preparation = report.save_preparation(filename, prepared)
+        record["previews"] = saved_preparation["pages"]
         records.append(record)
-        report.records[filename]["preprocessing"] = report.save_preparation(filename, prepared)
+        report.records[filename]["preprocessing"] = saved_preparation
         print(f"{filename}: {page.metadata['selection_method']}, {page.metadata['rotation_ccw']} CCW, "
               f"{prepared.duration_seconds:.2f}s {page.metadata['uncertainty']}", flush=True)
     assessed = [r["assessment"] for r in records if r["assessment"]]
     summary = {"configuration": config.mode, "images": len(records), "annotated": len(assessed),
-               "isolation_or_crop_failures": sum(r["crop_failure"] for r in assessed) if assessed else None,
+               "document_selection_failures": sum(r["document_selection_failure"] for r in assessed) if assessed else None,
+               "crop_failures": sum(r["crop_failure"] for r in assessed) if assessed else None,
                "wrong_rotations": sum(r["wrong_rotation"] for r in assessed) if assessed else None,
                "fallbacks": sum(r["page"]["selection_method"] in {"opencv", "full_page"} for r in records) if config.mode == "full" else 0,
                "low_confidence": sum(bool(r["page"]["uncertainty"]) for r in records),
@@ -109,9 +186,11 @@ def diagnose(image_directory, directory, config):
                "visual_review_required": True}
     atomic_write(directory / "diagnostics.json", json.dumps({"summary": summary, "records": records}, indent=2))
     contact_sheets(records, directory)
+    comparison = write_comparison_html(records, directory, config.mode)
     report.data["preprocessing_summary"] = summary
     report.save()
     print(json.dumps(summary, indent=2), flush=True)
+    print(f"Visual comparison: {comparison.resolve()}", flush=True)
     return records
 
 
@@ -155,7 +234,8 @@ def synthetic_diagnostics(directory, config):
     image.close()
     atomic_write(directory / "synthetic.json", json.dumps(results, indent=2))
     print(f"Synthetic cases: {len(results)}; wrong rotations: {sum(r['assessment']['wrong_rotation'] for r in results)}; "
-          f"isolation/crop failures: {sum(r['assessment']['crop_failure'] for r in results)}", flush=True)
+          f"selection failures: {sum(r['assessment']['document_selection_failure'] for r in results)}; "
+          f"crop failures: {sum(r['assessment']['crop_failure'] for r in results)}", flush=True)
 
 
 def extract_ablation(image_directory, directory, modes):
@@ -198,10 +278,15 @@ def main():
     parser.add_argument("--extract", action="store_true", help="Run real Surya and the configured parser for all modes")
     parser.add_argument("--synthetic", action="store_true", help="Also benchmark known rotations/perspective using the real local models")
     args = parser.parse_args()
+    # Keep diagnostic cache files with the benchmark artifacts. This avoids
+    # coupling a repeatable visual test to the application's working cache.
+    cache_dir = str(args.output / "_cache")
     for mode in args.modes:
-        diagnose(args.images, args.output / mode, replace(PreprocessingConfig.from_env(), mode=mode))
+        diagnose(args.images, args.output / mode,
+                 replace(PreprocessingConfig.from_env(), mode=mode, cache_dir=cache_dir))
     if args.synthetic:
-        synthetic_diagnostics(args.output / "synthetic", replace(PreprocessingConfig.from_env(), mode="full"))
+        synthetic_diagnostics(args.output / "synthetic",
+                              replace(PreprocessingConfig.from_env(), mode="full", cache_dir=cache_dir))
     if args.extract:
         extract_ablation(args.images, args.output, args.modes)
 

@@ -31,7 +31,7 @@ from .preprocessing_models import LocalModels, file_hash, model_versions, setup_
 
 
 ROOT = Path(__file__).resolve().parents[2] / ".ocr_preprocessing"
-PIPELINE_VERSION = "2"
+PIPELINE_VERSION = "3"
 _capture = ContextVar("prepared_document_capture", default=None)
 _pdf_lock = RLock()  # PDFium is not thread-safe, including across documents.
 
@@ -41,11 +41,12 @@ class PreprocessingConfig:
     mode: str = "off"
     pdf_dpi: int = 300
     analysis_max_side: int = 1200
-    boundary_allowance: float = .02
+    boundary_allowance: float = .04
     min_area_ratio: float = .025
     orientation_confidence: float = .8
     deskew: bool = True
     max_skew_degrees: float = 5
+    min_skew_degrees: float = 1.25
     threads: int = 2
     cache_dir: str = str(ROOT / "cache")
     model_dir: str = str(ROOT / "models")
@@ -57,14 +58,14 @@ class PreprocessingConfig:
             raise ValueError("PDF DPI must be 72..600 and analysis size 256..4096")
         if not 0 <= self.boundary_allowance <= .1 or not 0 < self.min_area_ratio < 1:
             raise ValueError("Invalid boundary allowance or minimum area")
-        if not 0 <= self.orientation_confidence <= 1 or not 0 <= self.max_skew_degrees <= 10 or self.threads < 1:
+        if not 0 <= self.orientation_confidence <= 1 or not 0 <= self.min_skew_degrees <= self.max_skew_degrees <= 10 or self.threads < 1:
             raise ValueError("Invalid orientation/deskew/thread configuration")
 
     @classmethod
     def from_env(cls):
         return cls(mode=os.getenv("OCR_PREPROCESSING", "off").strip().lower(),
                    pdf_dpi=int(os.getenv("OCR_PDF_DPI", "300")),
-                   boundary_allowance=float(os.getenv("OCR_BOUNDARY_ALLOWANCE", ".02")),
+                   boundary_allowance=float(os.getenv("OCR_BOUNDARY_ALLOWANCE", ".04")),
                    cache_dir=os.getenv("OCR_PREPROCESSING_CACHE", str(ROOT / "cache")),
                    model_dir=os.getenv("OCR_PREPROCESSING_MODELS", str(ROOT / "models")))
 
@@ -260,16 +261,23 @@ def boundary_candidates(rgb, config):
 
 
 def rectify(rgb, polygon, allowance):
-    tl, tr, br, bl = polygon
+    # Expand in the source frame. Adding a white target margin does not recover
+    # ink just outside the detector polygon, which is precisely where totals
+    # and footer identifiers often sit.
+    h, w = rgb.shape[:2]
+    center = polygon.mean(axis=0)
+    expanded = center + (polygon - center) * (1 + 2 * allowance)
+    expanded[:, 0] = np.clip(expanded[:, 0], 0, w - 1)
+    expanded[:, 1] = np.clip(expanded[:, 1], 0, h - 1)
+    tl, tr, br, bl = expanded
     width = int(round(max(np.linalg.norm(tr - tl), np.linalg.norm(br - bl)))) + 1
     height = int(round(max(np.linalg.norm(bl - tl), np.linalg.norm(br - tr)))) + 1
-    margin = int(np.ceil(min(width, height) * allowance))
-    target = np.array([[margin, margin], [width - 1 + margin, margin],
-                       [width - 1 + margin, height - 1 + margin], [margin, height - 1 + margin]], np.float32)
-    matrix = cv2.getPerspectiveTransform(np.float32(polygon), target)
-    result = cv2.warpPerspective(rgb, matrix, (width + 2 * margin, height + 2 * margin),
+    target = np.array([[0, 0], [width - 1, 0],
+                       [width - 1, height - 1], [0, height - 1]], np.float32)
+    matrix = cv2.getPerspectiveTransform(np.float32(expanded), target)
+    result = cv2.warpPerspective(rgb, matrix, (width, height),
                                  flags=cv2.INTER_CUBIC, borderValue=(255, 255, 255))
-    return result, matrix
+    return result, matrix, expanded
 
 
 def rotate_upright(rgb, degrees):
@@ -281,7 +289,7 @@ def rotate_upright(rgb, degrees):
     return np.ascontiguousarray(np.rot90(rgb, degrees // 90)), np.array(matrices[degrees], float)
 
 
-def estimate_skew(rgb, max_degrees):
+def estimate_skew(rgb, max_degrees, min_degrees=1.25):
     """Fit character centers within lines; borders alone cannot trigger deskew."""
     small = analysis_image(rgb, 1600)
     gray = cv2.cvtColor(small, cv2.COLOR_RGB2GRAY)
@@ -314,7 +322,7 @@ def estimate_skew(rgb, max_degrees):
         return 0., len(angles)
     median = float(np.median(angles))
     consistent = np.mean(np.abs(np.array(angles) - median) < .7) >= .8
-    return (median if consistent and abs(median) >= .2 else 0.), len(angles)
+    return (median if consistent and abs(median) >= min_degrees else 0.), len(angles)
 
 
 def deskew_image(rgb, angle):
@@ -334,7 +342,7 @@ def prepare_page(rgb, config, models):
     output = rgb
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
     blank = bool(np.ptp(gray) <= 3 and gray.std() < 1)
-    polygon, quality, warnings = None, {}, []
+    polygon, warp_polygon, quality, warnings = None, None, {}, []
     selection = "blank" if blank else "full_page"
     rotation, scores, skew = 0, None, 0.
     if config.mode == "full" and not blank:
@@ -362,7 +370,7 @@ def prepare_page(rgb, config, models):
         if quad is not None:
             quad *= [w / sw, h / sh]
             polygon = quad.tolist()
-            output, matrix = rectify(rgb, quad, config.boundary_allowance)
+            output, matrix, warp_polygon = rectify(rgb, quad, config.boundary_allowance)
             quality["area_ratio"] = cv2.contourArea(quad) / (w * h)
             # Geometric validity is not semantic foreground certainty.
             quality["foreground_verified"] = False
@@ -374,12 +382,13 @@ def prepare_page(rgb, config, models):
         matrix = correction @ matrix
         # Orientation-only is a clean right-angle ablation, without deskew.
         if config.mode == "full" and config.deskew:
-            skew, line_count = estimate_skew(output, config.max_skew_degrees)
+            skew, line_count = estimate_skew(output, config.max_skew_degrees, config.min_skew_degrees)
             quality["skew_supporting_lines"] = line_count
             if skew:
                 output, correction = deskew_image(output, skew)
                 matrix = correction @ matrix
     return output, {"original_dimensions": [w, h], "selected_polygon": polygon,
+                    "warp_polygon": warp_polygon.tolist() if polygon is not None else None,
                     "output_dimensions": [output.shape[1], output.shape[0]], "selection_method": selection,
                     "rotation_ccw": rotation, "orientation_scores": scores, "skew_ccw": skew,
                     "matrix": matrix.tolist(), "inverse_matrix": np.linalg.inv(matrix).tolist(),

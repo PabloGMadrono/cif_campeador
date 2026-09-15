@@ -2,6 +2,7 @@
 
 import base64
 import json
+import os
 import tempfile
 import unittest
 from dataclasses import asdict, fields
@@ -23,6 +24,9 @@ from src.ocr.ocr_openai import IMAGE_INVOICE_INSTRUCTIONS
 
 class MistralOcrTests(unittest.TestCase):
     def setUp(self):
+        environment = patch.dict(os.environ, OCR_PREPROCESSING="off")
+        environment.start()
+        self.addCleanup(environment.stop)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.path = Path(temporary.name) / "invoice.png"

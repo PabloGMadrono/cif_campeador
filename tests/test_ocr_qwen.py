@@ -2,6 +2,7 @@
 
 import base64
 import json
+import os
 import tempfile
 import unittest
 from io import BytesIO
@@ -20,6 +21,9 @@ from src.ocr.ocr_qwen import Ocr_qwen
 
 class QwenOcrTests(unittest.TestCase):
     def setUp(self):
+        environment = patch.dict(os.environ, OCR_PREPROCESSING="off")
+        environment.start()
+        self.addCleanup(environment.stop)
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.path = Path(directory.name) / "invoice.png"
