@@ -1,3 +1,4 @@
 -r requirements.txt
+pytest>=8,<10
 # Generate real text-based PDF fixtures for preprocessing tests.
 reportlab>=4,<5
