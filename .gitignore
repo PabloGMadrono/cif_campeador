@@ -36,6 +36,7 @@ htmlcov/
 /llama-*-bin-*.zip
 
 # Generated OCR reports are ignored by tests/results/.gitignore
+/data/
 
 # Local logs, notebook checkpoints, and editor temporary files
 *.log

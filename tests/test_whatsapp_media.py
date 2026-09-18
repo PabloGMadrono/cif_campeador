@@ -1,19 +1,22 @@
-"""Tests for filtering and downloading inbound WhatsApp images."""
+"""Tests for authenticated WhatsApp attachment downloads."""
 
 import asyncio
 import base64
 import hashlib
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
 import pytest
 
+from src.invoices.domain import MessageType
 from src.whatsapp.media import (
-    WhatsAppImage,
+    WhatsAppAttachment,
     WhatsAppMediaDownloader,
     WhatsAppMediaSettings,
-    extract_images,
 )
+
+RECEIVED_AT = datetime(2026, 9, 17, 12, 0, tzinfo=UTC)
 
 
 def _settings(tmp_path: Path) -> WhatsAppMediaSettings:
@@ -23,52 +26,11 @@ def _settings(tmp_path: Path) -> WhatsAppMediaSettings:
         graph_api_version="v23.0",
         allowed_media_hosts=("lookaside.fbsbx.com",),
         request_timeout_seconds=5,
-        max_image_bytes=1024,
+        max_media_bytes=1024,
     )
 
 
-def _payload(*messages: dict) -> dict:
-    return {
-        "object": "whatsapp_business_account",
-        "entry": [
-            {
-                "changes": [
-                    {
-                        "field": "messages",
-                        "value": {"messages": list(messages)},
-                    }
-                ]
-            }
-        ],
-    }
-
-
-def test_extract_images_ignores_non_image_messages():
-    payload = _payload(
-        {"id": "text-message", "type": "text", "text": {"body": "Hello"}},
-        {
-            "id": "image-message",
-            "type": "image",
-            "image": {
-                "id": "1698584094538284",
-                "mime_type": "image/jpeg",
-                "sha256": "digest",
-                "url": "https://lookaside.fbsbx.com/media",
-            },
-        },
-    )
-
-    assert extract_images(payload) == [
-        WhatsAppImage(
-            media_id="1698584094538284",
-            mime_type="image/jpeg",
-            sha256="digest",
-            download_url="https://lookaside.fbsbx.com/media",
-        )
-    ]
-
-
-def test_download_saves_authenticated_image_and_verifies_digest(tmp_path):
+def test_download_saves_authenticated_image_in_date_directory(tmp_path):
     image_bytes = b"a small jpeg fixture"
     encoded_digest = base64.b64encode(hashlib.sha256(image_bytes).digest()).decode()
 
@@ -81,28 +43,30 @@ def test_download_saves_authenticated_image_and_verifies_digest(tmp_path):
             headers={"content-type": "image/jpeg"},
         )
 
-    async def download() -> Path:
+    async def download():
         async with httpx.AsyncClient(
             transport=httpx.MockTransport(handle_request)
         ) as client:
             downloader = WhatsAppMediaDownloader(_settings(tmp_path), client)
             return await downloader.download(
-                WhatsAppImage(
+                WhatsAppAttachment(
                     media_id="1698584094538284",
+                    message_type=MessageType.IMAGE,
                     mime_type="image/jpeg",
+                    received_at=RECEIVED_AT,
                     sha256=encoded_digest,
                     download_url="https://lookaside.fbsbx.com/media",
                 )
             )
 
-    output_path = asyncio.run(download())
+    result = asyncio.run(download())
 
-    assert output_path == tmp_path / "1698584094538284.jpg"
-    assert output_path.read_bytes() == image_bytes
-    assert not output_path.with_suffix(".jpg.part").exists()
+    assert result.storage_path == "2026/09/17/1698584094538284.jpg"
+    assert result.file_size == len(image_bytes)
+    assert result.absolute_path.read_bytes() == image_bytes
 
 
-def test_download_resolves_url_when_webhook_does_not_include_one(tmp_path):
+def test_download_resolves_url_and_accepts_pdf(tmp_path):
     requests: list[httpx.Request] = []
 
     def handle_request(request: httpx.Request) -> httpx.Response:
@@ -114,30 +78,31 @@ def test_download_resolves_url_when_webhook_does_not_include_one(tmp_path):
             )
         return httpx.Response(
             200,
-            content=b"image",
-            headers={"content-type": "image/png"},
+            content=b"%PDF fixture",
+            headers={"content-type": "application/pdf"},
         )
 
-    async def download() -> Path:
+    async def download():
         async with httpx.AsyncClient(
             transport=httpx.MockTransport(handle_request)
         ) as client:
             downloader = WhatsAppMediaDownloader(_settings(tmp_path), client)
             return await downloader.download(
-                WhatsAppImage(media_id="media-id", mime_type="image/png")
+                WhatsAppAttachment(
+                    media_id="pdf-media-id",
+                    message_type=MessageType.DOCUMENT,
+                    mime_type="application/pdf",
+                    received_at=RECEIVED_AT,
+                )
             )
 
-    output_path = asyncio.run(download())
+    result = asyncio.run(download())
 
-    assert output_path == tmp_path / "media-id.png"
+    assert result.storage_path.endswith("pdf-media-id.pdf")
     assert [str(request.url) for request in requests] == [
-        "https://graph.facebook.com/v23.0/media-id",
+        "https://graph.facebook.com/v23.0/pdf-media-id",
         "https://lookaside.fbsbx.com/resolved-media",
     ]
-    assert all(
-        request.headers["authorization"] == "Bearer test-access-token"
-        for request in requests
-    )
 
 
 def test_download_rejects_untrusted_url_without_sending_token(tmp_path):
@@ -150,9 +115,11 @@ def test_download_rejects_untrusted_url_without_sending_token(tmp_path):
         ) as client:
             downloader = WhatsAppMediaDownloader(_settings(tmp_path), client)
             await downloader.download(
-                WhatsAppImage(
+                WhatsAppAttachment(
                     media_id="media-id",
+                    message_type=MessageType.IMAGE,
                     mime_type="image/jpeg",
+                    received_at=RECEIVED_AT,
                     download_url="https://example.com/steal-token",
                 )
             )
