@@ -8,6 +8,6 @@ from .ocr_mistral import Ocr_mistral
 
 # Import additional implementations here and change this assignment to select one.
 # Surya initializes its inference backend lazily, on first extraction.
-invoice_extractor = Ocr_surya()
+invoice_extractor = Ocr_openai()
 
 __all__ = ["invoice_extractor"]

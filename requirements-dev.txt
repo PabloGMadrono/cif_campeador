@@ -1,4 +1,6 @@
 -r requirements.txt
 pytest>=8,<10
+ruff>=0.12,<1
+fakeredis>=2,<3
 # Generate real text-based PDF fixtures for preprocessing tests.
 reportlab>=4,<5
