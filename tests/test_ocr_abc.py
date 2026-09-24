@@ -141,9 +141,11 @@ class SharedInvoiceTests(unittest.TestCase):
             self.ocr.parse_invoice("OCR text")
 
     def test_ocr_failure_prevents_api_call(self):
-        with patch.object(self.ocr, "extract_text", side_effect=FileNotFoundError):
-            with self.assertRaises(FileNotFoundError):
-                self.ocr.extract_invoice("missing.HEIC")
+        with (
+            patch.object(self.ocr, "extract_text", side_effect=FileNotFoundError),
+            self.assertRaises(FileNotFoundError),
+        ):
+            self.ocr.extract_invoice("missing.HEIC")
         self.assertFalse(self.requests)
 
     def test_default_client_is_loaded_lazily_and_reused(self):

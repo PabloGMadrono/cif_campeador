@@ -10,8 +10,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .models import Invoice
 from .ocr_abc import INVOICE_FIELD_INSTRUCTIONS, INVOICE_LABEL_HINTS, Ocr_operator
-from .preprocessing import prepare_document, image_data_url
-
+from .preprocessing import image_data_url, prepare_document
 
 IMAGE_INVOICE_INSTRUCTIONS = (
     "Read the supplied document images and extract the invoice fields directly.\n"

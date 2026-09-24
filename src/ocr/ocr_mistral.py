@@ -15,8 +15,7 @@ from src.config import MISTRAL_API_KEY
 from .models import Invoice
 from .ocr_abc import Ocr_operator
 from .ocr_openai import IMAGE_INVOICE_INSTRUCTIONS
-from .preprocessing import prepare_document, image_data_url, lossless_pdf
-
+from .preprocessing import image_data_url, lossless_pdf, prepare_document
 
 _INVOICE_ADAPTER = TypeAdapter(Invoice)
 
@@ -100,7 +99,9 @@ class Ocr_mistral(Ocr_operator):
             for page in pages:
                 markdown = getattr(page, "markdown", None)
                 if not isinstance(markdown, str):
-                    raise RuntimeError("Mistral OCR returned a page without Markdown text")
+                    raise RuntimeError(  # noqa: TRY004 - Invalid provider response.
+                        "Mistral OCR returned a page without Markdown text"
+                    )
                 texts.append(markdown)
         return "\n\n".join(texts)
 

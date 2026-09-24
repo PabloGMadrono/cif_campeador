@@ -14,7 +14,6 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-
 MODEL_MANIFEST = {
     "docaligner": {
         "name": "DocAligner/heatmap/fastvit_sa24",
@@ -113,6 +112,7 @@ class LocalModels:
 def setup_models(directory):
     """Explicit, hash-verified downloads; never called by document processing."""
     import urllib.request
+
     from filelock import FileLock
 
     directory = Path(directory)

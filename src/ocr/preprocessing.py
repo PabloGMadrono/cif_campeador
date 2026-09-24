@@ -12,23 +12,23 @@ import json
 import os
 import tempfile
 import time
-from threading import RLock
-from importlib.metadata import version
 import zlib
-from contextlib import ExitStack, contextmanager, closing
+from contextlib import ExitStack, closing, contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass
+from importlib.metadata import version
 from io import BytesIO
 from pathlib import Path
+from threading import RLock
 
 import cv2
 import numpy as np
 from filelock import FileLock
 from PIL import Image, ImageOps, ImageSequence
 
-from src import config as _app_config  # Load .env before reading settings.
-from .preprocessing_models import LocalModels, file_hash, model_versions, setup_models
+from src import config as _app_config  # noqa: F401 - Load .env before settings.
 
+from .preprocessing_models import LocalModels, file_hash, model_versions, setup_models
 
 ROOT = Path(__file__).resolve().parents[2] / ".ocr_preprocessing"
 PIPELINE_VERSION = "3"
@@ -160,11 +160,15 @@ def decode_pages(path, pdf_dpi=300):
     with Image.open(path) as document:
         for frame in ImageSequence.Iterator(document):
             raw_size, orientation = frame.size, frame.getexif().get(274, 1)
-            with ImageOps.exif_transpose(frame) as oriented, oriented.convert("RGBA") as rgba:
-                with Image.new("RGB", rgba.size, "white") as rgb, rgba.getchannel("A") as alpha:
-                    rgb.paste(rgba, mask=alpha)
-                    yield np.array(rgb), {"raw_dimensions": list(raw_size), "exif_orientation": orientation,
-                                          "exif_matrix": exif_matrix(orientation, *raw_size).tolist()}
+            with (
+                ImageOps.exif_transpose(frame) as oriented,
+                oriented.convert("RGBA") as rgba,
+                Image.new("RGB", rgba.size, "white") as rgb,
+                rgba.getchannel("A") as alpha,
+            ):
+                rgb.paste(rgba, mask=alpha)
+                yield np.array(rgb), {"raw_dimensions": list(raw_size), "exif_orientation": orientation,
+                                      "exif_matrix": exif_matrix(orientation, *raw_size).tolist()}
 
 
 def analysis_image(rgb, max_side):
@@ -270,8 +274,8 @@ def rectify(rgb, polygon, allowance):
     expanded[:, 0] = np.clip(expanded[:, 0], 0, w - 1)
     expanded[:, 1] = np.clip(expanded[:, 1], 0, h - 1)
     tl, tr, br, bl = expanded
-    width = int(round(max(np.linalg.norm(tr - tl), np.linalg.norm(br - bl)))) + 1
-    height = int(round(max(np.linalg.norm(bl - tl), np.linalg.norm(br - tr)))) + 1
+    width = round(max(np.linalg.norm(tr - tl), np.linalg.norm(br - bl))) + 1
+    height = round(max(np.linalg.norm(bl - tl), np.linalg.norm(br - tr))) + 1
     target = np.array([[0, 0], [width - 1, 0],
                        [width - 1, height - 1], [0, height - 1]], np.float32)
     matrix = cv2.getPerspectiveTransform(np.float32(expanded), target)

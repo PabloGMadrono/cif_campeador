@@ -138,9 +138,11 @@ class OpenAIOcrTests(unittest.TestCase):
 
     def test_all_tiff_frames_are_sent_in_one_call(self):
         path = self.path.with_suffix(".tiff")
-        with Image.new("RGB", (10, 15), "white") as first:
-            with Image.new("RGB", (30, 25), "white") as second:
-                first.save(path, save_all=True, append_images=[second])
+        with (
+            Image.new("RGB", (10, 15), "white") as first,
+            Image.new("RGB", (30, 25), "white") as second,
+        ):
+            first.save(path, save_all=True, append_images=[second])
         self.ocr.extract_invoice(str(path))
         self.assertEqual(len(self.requests), 1)
         self.assertEqual([image.size for image in self.sent_images()], [(10, 15), (30, 25)])
@@ -177,9 +179,11 @@ class OpenAIOcrTests(unittest.TestCase):
             self.path.write_bytes(b"corrupt image")
             with self.assertRaises(UnidentifiedImageError):
                 ocr.extract_invoice(str(self.path))
-            with patch("src.ocr.ocr_openai._document_image_urls", return_value=[]):
-                with self.assertRaisesRegex(ValueError, "no pages"):
-                    ocr.extract_invoice(str(self.path))
+            with (
+                patch("src.ocr.ocr_openai._document_image_urls", return_value=[]),
+                self.assertRaisesRegex(ValueError, "no pages"),
+            ):
+                ocr.extract_invoice(str(self.path))
             factory.assert_not_called()
 
     def test_client_is_lazy_and_shared_with_text_parsing(self):
