@@ -403,6 +403,45 @@ change that assignment; the tests require no changes. The shared
 instance is reused for all images and receives only document paths. An optional
 `OCR_IMAGE_DIR` overrides the directory containing the images.
 
+### Level-two benchmark
+
+The richer benchmark reads `tests/ground_truths/ocr_ground_truth_v2.csv`, groups
+repeated rows into one OCR execution per document, and keeps multiple fiscal
+lines as separate expectations. Run it with pytest and select a dataset scope:
+
+```powershell
+python -m pytest tests/test_invoice_accuracy_v2.py --ocr-scope valid -s
+python -m pytest tests/test_invoice_accuracy_v2.py --ocr-scope invalid -s
+python -m pytest tests/test_invoice_accuracy_v2.py --ocr-scope valid-invalid -s
+python -m pytest tests/test_invoice_accuracy_v2.py --ocr-scope review -s
+python -m pytest tests/test_invoice_accuracy_v2.py --ocr-scope all -s
+```
+
+`OCR_TEST_SCOPE` provides the same selection for CI. `valid-invalid` excludes
+manual-review cases. `all` includes them, but review cases never enter the
+binary classification denominator. Classification has only `valid` and
+`invalid` outcomes.
+
+Classification and field extraction are reported separately. Field accuracy
+only includes populated reference cells; blank cells, `-`, and null values
+neither reward nor penalize an extraction. Coverage reports how many possible
+cells had an annotated reference. Supplier-name comparison ignores letter case,
+repeated whitespace, periods, and commas. Other identifiers retain punctuation.
+
+`Tipo` is stored as `diagnostic_type` on both sides of the report. It is useful
+for filtering and diagnosis but is never scored. Reports are saved after every
+document below `tests/results/v2/runs`, with a self-contained `dashboard.html`,
+`run.json`, `results.csv`, and `fields.csv`. Set `OCR_V2_REPORT_DIR` to override
+that directory.
+
+The production `Invoice` model is intentionally unchanged. The benchmark
+adapts its eight existing fields and treats classification, diagnostic type,
+IRPF, RE, and additional fiscal lines as absent until a future result wrapper
+exposes `document_status`, optional `diagnostic_type`, and optional `tax_lines`.
+Consequently the current extractor can still be measured for its existing
+fields, while missing annotated capabilities remain visible rather than being
+silently awarded credit.
+
 Images are discovered recursively below that directory. Keep the CSV's image
 basenames unchanged when moving files into `easy/`, `medium/`, `hard/` or
 `special_cases/`. The first folder below the image root is the category; additional
