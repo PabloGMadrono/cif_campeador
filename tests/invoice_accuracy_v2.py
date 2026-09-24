@@ -226,11 +226,11 @@ def normalize_field(name: str, value: str | None):
         return None
     if not isinstance(value, str):
         raise TypeError(f"{name} must be str or None")
-    value = " ".join(unicodedata.normalize("NFC", value).casefold().split())
+    value = "".join(unicodedata.normalize("NFC", value).casefold().split())
     if value in MISSING_MARKERS:
         return None
-    if name == "numero_factura":
-        return "".join(value.split())
+    if name in {"numero_factura", "nif_proveedor"} and value.isdecimal():
+        return str(int(value))
     if name == "fecha":
         try:
             if re.fullmatch(r"\d{1,2}/\d{1,2}/\d{4}", value):

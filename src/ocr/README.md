@@ -370,13 +370,14 @@ The benchmark reports binary classification and field extraction separately.
 Failed executions remain visible and subsequent documents still run. `-s`
 keeps per-document progress visible while pytest is running.
 
-Comparison ignores surrounding/repeated whitespace and letter case, accepts
-DD/MM/YYYY and ISO dates, and compares numeric values exactly with Decimal.
+Comparison ignores whitespace and letter case, accepts DD/MM/YYYY and ISO
+dates, and compares numeric values exactly with Decimal, including integer
+values with leading zeroes.
 Spanish amounts such as `1.117,04 €` equal `1117.04`; `21,00%` equals `21`.
-Identifiers retain leading zeroes, punctuation and accents. Whitespace inside
-`numero_factura` is ignored, so `E232-61145209` and `E232 - 61145209` compare
-equal. Empty reference cells are omitted from scoring. Reference amounts are
-used as recorded, except for documented in-memory document-total handling.
+Purely numeric invoice numbers and tax identifiers ignore leading zeroes.
+Alphanumeric identifiers retain leading zeroes, punctuation, and accents. Empty
+reference cells are omitted from scoring. Reference amounts are used as
+recorded, except for documented in-memory document-total handling.
 
 The application and black-box tests import the shared extractor selected in
 `src/ocr/__init__.py`:
@@ -417,8 +418,9 @@ binary classification denominator. Classification has only `valid` and
 Classification and field extraction are reported separately. Field accuracy
 only includes populated reference cells; blank cells, `-`, and null values
 neither reward nor penalize an extraction. Coverage reports how many possible
-cells had an annotated reference. Supplier-name comparison ignores letter case,
-repeated whitespace, periods, and commas. Other identifiers retain punctuation.
+cells had an annotated reference. Supplier-name comparison also ignores periods,
+commas, legal forms, and longer commercial-name suffixes. Other identifiers
+retain punctuation.
 
 `Tipo` is stored as `diagnostic_type` on both sides of the report. It is useful
 for filtering and diagnosis but is never scored. Reports are saved after every

@@ -127,6 +127,44 @@ def test_invoice_number_ignores_whitespace_but_preserves_punctuation():
     )
 
 
+@pytest.mark.parametrize("field", ["numero_factura", "nif_proveedor"])
+def test_numeric_identifiers_ignore_leading_zeroes(field):
+    assert normalize_field(field, "000123") == normalize_field(field, "123")
+
+
+@pytest.mark.parametrize(
+    ("field", "with_zeroes", "without_zeroes"),
+    [
+        ("numero_factura", "FAC-000123", "FAC-123"),
+        ("nif_proveedor", "B01234567", "B1234567"),
+    ],
+)
+def test_alphanumeric_identifiers_preserve_leading_zeroes(
+    field, with_zeroes, without_zeroes
+):
+    assert normalize_field(field, with_zeroes) != normalize_field(
+        field, without_zeroes
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "expected", "obtained"),
+    [
+        ("fecha", "17/08/2022", " 17 / 08 / 2022 "),
+        ("nif_proveedor", "B57991598", " B 57991598 "),
+        ("nombre_proveedor", "Copies Salom S.L.", " Copies  Salom  S.L. "),
+        ("total", "1117.04", " 1 117,04 € "),
+    ],
+)
+def test_fields_ignore_whitespace(field, expected, obtained):
+    assert normalize_field(field, expected) == normalize_field(field, obtained)
+
+
+@pytest.mark.parametrize("field", ["tipo_iva", "tipo_re", "tipo_irpf"])
+def test_integer_tax_rates_ignore_leading_zeroes(field):
+    assert normalize_field(field, "21") == normalize_field(field, "00021")
+
+
 def test_unannotated_fields_do_not_reward_or_penalize_extraction():
     expected = replace(
         document(),
