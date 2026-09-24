@@ -40,9 +40,10 @@ not calculate, aggregate, or correct monetary or percentage fields.
 
 Classify every document with validity valid or invalid. Valid documents are
 invoices, simplified invoices/fiscal receipts, and rectifying invoices. Invalid
-documents include proformas, pretickets, card-terminal/payment slips without an
-invoice, non-invoice documents, and documents too unreadable to establish that
-they are invoices. Never return review. diagnostic_type is a short optional
+documents include proformas, pretickets, comandas, cuentas de mesa,
+card-terminal/payment slips without an invoice, non-invoice documents, and
+documents too unreadable to establish that they are invoices. Never return
+review. diagnostic_type is a short optional
 informative label and does not need to use a fixed vocabulary. Classification
 must not stop extraction: return every readable field even for invalid documents.
 
