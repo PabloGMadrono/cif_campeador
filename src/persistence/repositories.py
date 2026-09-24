@@ -19,7 +19,14 @@ from src.invoices.domain import (
 )
 from src.jobs.contracts import DownloadJob
 
-from .models import CustomerPhoneRecord, CustomerRecord, DocumentRecord, InvoiceRecord
+from .models import (
+    CustomerPhoneRecord,
+    CustomerRecord,
+    DocumentRecord,
+    InvoiceEquivalenceSurchargeRecord,
+    InvoiceRecord,
+    InvoiceIvaLineRecord,
+)
 
 
 class SqlAlchemyCustomerRepository:
@@ -220,20 +227,43 @@ class SqlAlchemyInvoiceRepository:
         if self.session.get(InvoiceRecord, invoice.document_id) is not None:
             return
         values = invoice.invoice
-        self.session.add(
-            InvoiceRecord(
-                document_id=invoice.document_id,
-                fecha=values.fecha,
-                numero_factura=values.numero_factura,
-                nif_proveedor=values.nif_proveedor,
-                nombre_proveedor=values.nombre_proveedor,
-                base_imponible=values.base_imponible,
-                tipo_iva=values.tipo_iva,
-                cuota_iva=values.cuota_iva,
-                total=values.total,
-                extracted_at=invoice.extracted_at,
-            )
+        record = InvoiceRecord(
+            document_id=invoice.document_id,
+            validity=values.validity,
+            diagnostic_type=values.diagnostic_type,
+            fecha=values.fecha,
+            numero_factura=values.numero_factura,
+            nif_proveedor=values.nif_proveedor,
+            nombre_proveedor=values.nombre_proveedor,
+            base_retencion=(
+                values.retencion_irpf.base_retencion if values.retencion_irpf else None
+            ),
+            tipo_irpf=(values.retencion_irpf.tipo_irpf if values.retencion_irpf else None),
+            cuota_irpf=(
+                values.retencion_irpf.cuota_irpf if values.retencion_irpf else None
+            ),
+            total=values.total,
+            extracted_at=invoice.extracted_at,
         )
+        record.iva_lines = [
+            InvoiceIvaLineRecord(
+                position=position,
+                base_imponible=line.base_imponible,
+                tipo_iva=line.tipo_iva,
+                cuota_iva=line.cuota_iva,
+            )
+            for position, line in enumerate(values.lineas_iva)
+        ]
+        record.equivalence_surcharges = [
+            InvoiceEquivalenceSurchargeRecord(
+                position=position,
+                base_imponible=line.base_imponible,
+                tipo_re=line.tipo_re,
+                cuota_re=line.cuota_re,
+            )
+            for position, line in enumerate(values.recargos_equivalencia)
+        ]
+        self.session.add(record)
 
 
 def _phone_from_record(record: CustomerPhoneRecord) -> CustomerPhoneNumber:
@@ -273,18 +303,52 @@ def _document_from_record(record: DocumentRecord) -> InboundDocument:
 
 
 def _invoice_from_record(record: InvoiceRecord) -> StoredInvoice:
-    from src.ocr.models import Invoice
+    from src.ocr.models import (
+        EquivalenceSurcharge,
+        Invoice,
+        IrpfWithholding,
+        IvaLine,
+    )
+
+    if record.validity is None:
+        raise RuntimeError(
+            f"Invoice {record.document_id} predates validity classification; reprocess it"
+        )
+
+    withholding = None
+    if any((record.base_retencion, record.tipo_irpf, record.cuota_irpf)):
+        withholding = IrpfWithholding(
+            base_retencion=record.base_retencion,
+            tipo_irpf=record.tipo_irpf,
+            cuota_irpf=record.cuota_irpf,
+        )
 
     return StoredInvoice(
         document_id=record.document_id,
         invoice=Invoice(
+            validity=record.validity,
+            diagnostic_type=record.diagnostic_type,
             fecha=record.fecha,
             numero_factura=record.numero_factura,
             nif_proveedor=record.nif_proveedor,
             nombre_proveedor=record.nombre_proveedor,
-            base_imponible=record.base_imponible,
-            tipo_iva=record.tipo_iva,
-            cuota_iva=record.cuota_iva,
+            lineas_iva=tuple(
+                IvaLine(
+                    base_imponible=line.base_imponible,
+                    tipo_iva=line.tipo_iva,
+                    cuota_iva=line.cuota_iva,
+                )
+                for line in record.iva_lines
+            ),
+            recargos_equivalencia=tuple(
+                EquivalenceSurcharge(
+                    base_imponible=line.base_imponible,
+                    tipo_re=line.tipo_re,
+                    cuota_re=line.cuota_re,
+                )
+                for line in record.equivalence_surcharges
+            ),
+            retencion_irpf=withholding,
             total=record.total,
         ),
         extracted_at=record.extracted_at,

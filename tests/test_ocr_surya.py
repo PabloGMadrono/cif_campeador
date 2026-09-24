@@ -7,7 +7,7 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock, patch
 
 from src.ocr.ocr_abc import Ocr_operator
-from src.ocr.evidence import InvoiceEvidence, InvoiceExtraction
+from src.ocr.evidence import InvoiceEvidence, InvoiceExtraction, SourceQuote
 from src.ocr.models import Invoice
 from src.ocr.ocr_surya import Ocr_surya, _html_to_text
 
@@ -137,11 +137,16 @@ class SuryaOcrTests(unittest.TestCase):
         self.images.pop()
         self.predictor.return_value = [page([block("Nothing identified")])]
         ocr = Ocr_surya()
-        ocr._parse_structured = Mock(return_value=InvoiceEvidence.empty())
+        evidence = InvoiceEvidence.unreadable().model_copy(update={
+            "classification_sources": [
+                SourceQuote(block_id="p1_b1", printed_text="Nothing identified")
+            ]
+        })
+        ocr._parse_structured = Mock(return_value=evidence)
         with patch.object(ocr, "extract_text", side_effect=AssertionError("Must retain blocks")):
             result = ocr.extract_invoice_with_evidence(str(self.path))
             self.assertIsInstance(result, InvoiceExtraction)
-            self.assertEqual(result.invoice, Invoice.empty())
+            self.assertEqual(result.invoice, Invoice.unreadable())
             self.predictor.assert_called_once_with(self.images)
             self.assertEqual(ocr._parse_structured.call_count, 1)
             self.assertIs(type(ocr.extract_invoice(str(self.path))), Invoice)
@@ -154,7 +159,7 @@ class SuryaOcrTests(unittest.TestCase):
         ocr = Ocr_surya()
         ocr._parse_structured = Mock(side_effect=AssertionError("No API for empty text"))
         result = ocr.extract_invoice_with_evidence(str(self.path))
-        self.assertEqual(result.invoice, Invoice.empty())
+        self.assertEqual(result.invoice, Invoice.unreadable())
         self.assertTrue(result.document.pages[0].blocks[0].skipped)
         ocr._parse_structured.assert_not_called()
 

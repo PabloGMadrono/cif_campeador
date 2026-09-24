@@ -7,15 +7,15 @@ from unittest.mock import Mock
 
 import pytest
 
-from src.ocr.models import Invoice
+from src.ocr.models import InvoiceValidity, IvaLine
 from tests import test_invoice_accuracy_v2 as benchmark
 from tests.invoice_accuracy_v2 import (
-    DocumentStatus,
     GroundTruthDocument,
+    GroundTruthIvaLine,
     OcrScope,
-    TaxLine,
     score_document,
 )
+from tests.invoice_fixtures import make_invoice
 from tests.invoice_report_v2 import LevelTwoReport
 from tests.test_invoice_accuracy_v2 import _resolve_v2_image
 
@@ -23,7 +23,7 @@ from tests.test_invoice_accuracy_v2 import _resolve_v2_image
 def expected_document() -> GroundTruthDocument:
     return GroundTruthDocument(
         filename="one.png",
-        status=DocumentStatus.INVALID,
+        validity=InvoiceValidity.INVALID,
         review_required=False,
         diagnostic_type="Proforma",
         notes="Informative only",
@@ -31,35 +31,25 @@ def expected_document() -> GroundTruthDocument:
         numero_factura="001",
         nif_proveedor=None,
         nombre_proveedor="Example, S.L.",
-        tax_lines=(
-            TaxLine(
-                tipo_re=None,
-                cuota_re=None,
-                tipo_irpf=None,
-                cuota_irpf=None,
-                base_imponible="10,00 €",
-                tipo_iva="21%",
-                cuota_iva="2,10 €",
-                total="12,10 €",
-            ),
-        ),
+        lineas_iva=(GroundTruthIvaLine("10,00 €", "21%", "2,10 €"),),
+        recargos_equivalencia=(),
+        retencion_irpf=None,
+        total="12,10 €",
+        raw_row_totals=("12,10 €",),
+        total_derivation="printed",
     )
 
 
 def actual_result():
-    return SimpleNamespace(
-        document_status=DocumentStatus.INVALID,
+    return make_invoice(
+        validity=InvoiceValidity.INVALID,
         diagnostic_type="Preticket",
-        invoice=Invoice(
-            fecha="2026-02-01",
-            numero_factura="001",
-            nif_proveedor="unexpected-but-unscored",
-            nombre_proveedor="Example SL",
-            base_imponible="10",
-            tipo_iva="21",
-            cuota_iva="2.1",
-            total="12.1",
-        ),
+        fecha="2026-02-01",
+        numero_factura="001",
+        nif_proveedor="unexpected-but-unscored",
+        nombre_proveedor="Example SL",
+        lineas_iva=(IvaLine("10", "21", "2.1"),),
+        total="12.1",
     )
 
 
@@ -82,7 +72,7 @@ def test_report_saves_json_results_fields_and_informative_diagnostic_types(tmp_p
     assert saved["status"] == "completed"
     assert saved["summary"]["classification"]["accuracy"] == 1
     assert saved["summary"]["extraction"]["accuracy"] == 1
-    assert saved["summary"]["extraction"]["coverage"] == 7 / 12
+    assert saved["summary"]["extraction"]["coverage"] == 7 / 8
     record = saved["records"][0]
     assert record["score"]["expected_diagnostic_type"] == "Proforma"
     assert record["score"]["obtained_diagnostic_type"] == "Preticket"

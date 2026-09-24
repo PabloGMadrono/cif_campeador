@@ -13,12 +13,10 @@ The glossary also guides Qwen and OpenAI text transcription without changing
 printed labels or omitting other text. Surya uses it in the invoice block parser;
 its local recognition predictor does not accept this prompt.
 
-When several VAT rates are printed without a single overall rate, the shared
-invoice prompt requests an effective `tipo_iva`: `100 * sum(VAT amounts) /
-sum(corresponding taxable bases)`, rounded to two decimal places. It uses each
-printed VAT row once, excludes unrelated amounts, and returns null if the
-required values are missing/unreadable or the combined base is zero. This is
-an explicit exception for the rate; printed monetary fields remain unchanged.
+The shared result keeps each printed VAT row in `lineas_iva`. Equivalence
+surcharges live separately in `recargos_equivalencia`, and an explicitly
+printed withholding lives in `retencion_irpf`. Backends do not calculate an
+effective VAT rate, aggregate fiscal rows, or infer missing tax values.
 
 ## Mistral Document AI OCR
 
@@ -57,10 +55,11 @@ Multipage images are packaged into one PDF in frame order at the configured DPI
 (default 300), with lossless RGB compression. Both extraction methods use this
 document-wide transport.
 
-An annotation with all eight fields null returns an empty Invoice. Missing,
+Every annotation includes binary `validity`, optional `diagnostic_type`, the
+identity fields, separate VAT/RE/IRPF structures, and `total`. Missing,
 malformed or schema-invalid annotations raise `RuntimeError`; there is no parser
-fallback. Empty OCR Markdown alone is not treated as an empty invoice. Plain
-text extraction rejects missing pages. File, API and SDK response-validation
+fallback. Empty OCR Markdown alone is not treated as a successful annotation.
+Plain-text extraction rejects missing pages. File, API and SDK response-validation
 errors propagate. Extraction sends document content to Mistral and is billable.
 
 To select this backend for the application and accuracy benchmark, set
@@ -264,20 +263,19 @@ pages. Reuse the same instance for subsequent documents.
 
 ### Surya invoice extraction with source evidence
 
-`extract_invoice(path)` now preserves Surya's page and block structure for the
-GPT-5-mini parsing step, and still returns the same eight-field `Invoice`.
+`extract_invoice(path)` preserves Surya's page and block structure for the
+structured parsing step and returns the complete shared `Invoice`.
 It performs one Surya OCR pass and one structured Responses call. The parser
 receives each block's stable document-local ID, pixel polygon, layout label,
 reading order, original HTML and plain text, together with page bounds.
 Skipped blocks are retained as diagnostics and cannot be cited as evidence.
 Block errors still fail extraction; images are closed even when inference fails.
 
-The parser returns a value, status (`printed`, `derived`, `missing`, or
-`unreadable`) and source quotes for each field. Every non-null value must cite
-existing readable blocks. Local validation checks quoted text against those
-blocks, tolerating whitespace and Unicode composition differences. Only the
-effective VAT rate may be marked derived, with all contributing VAT rows cited.
-These checks validate the references, not the correctness of the OCR, the chosen
+The parser returns a value, status (`printed`, `missing`, or `unreadable`) and
+source quotes for each field, plus sources for its validity decision. Every
+non-null value must cite existing readable blocks. Local validation checks
+quoted text against those blocks, tolerating whitespace and Unicode composition
+differences. These checks validate the references, not the correctness of the OCR, the chosen
 supplier/document, or the arithmetic. Coordinates describe the decoded image;
 they do not automatically orient or isolate overlapping receipts.
 
@@ -300,14 +298,14 @@ You can save `document.model_dump_json()` and reload it with
 `OcrDocument.model_validate_json(...)` from `src.ocr.evidence` to compare parser
 changes against identical OCR input. `extract_text(path)` retains its existing
 plain-text interface; explicit `parse_invoice(text)` uses the inherited text
-parser. Empty usable OCR text produces an empty Invoice without an API call.
+parser. Empty usable OCR text produces `Invoice.unreadable()` without an API call.
 Invalid schemas, missing citations, unknown/skipped source blocks and fabricated
 quotes raise errors. Automatic crop rereads are not implemented in this change.
 
 The accuracy benchmark uses `extract_invoice_with_evidence` when available and
 saves successful extraction blocks and field citations under each invoice's
-`extraction_evidence` in `runs/<execution-id>/run.json`. Scoring still uses only
-the eight public Invoice values. Other backends and older runs have no evidence;
+`extraction_evidence` in `runs/<execution-id>/run.json`. The legacy benchmark
+still scores its original eight fields through a compatibility projection. Other backends and older runs have no evidence;
 the dashboard and CSV scores remain compatible. Evidence is available in JSON,
 not rendered as HTML in the dashboard. Ordinary `extract_invoice` calls do not
 write files or keep mutable last-result state on the shared extractor.
@@ -325,23 +323,22 @@ this from the repository root:
 python -m src.ocr.ocr_surya "tests/images/trial_invoices/IMG_3309.HEIC"
 ```
 
-## Invoice accuracy tests
+## Invoice model and accuracy tests
 
-Run the black-box invoice suite from the repository root:
+Run the level-two black-box benchmark from the repository root:
 
 ```shell
-python -m unittest tests.test_invoice_accuracy -v
+python -m pytest tests/test_invoice_accuracy_v2.py --ocr-scope all -s
 ```
 
-It reads every row of `tests/ground_truths/ground_truth_trial_invoices.csv`
+It reads `tests/ground_truths/ocr_ground_truth_v2.csv`
 and passes the corresponding image from `tests/images/trial_invoices` to
 `extract_invoice(path)`, or the evidence API described above. The scored result
-must be the shared `Invoice`
-Pydantic dataclass in `src/ocr/models.py`, with the eight CSV fields excluding
-`Nombre foto` and `Notas`. Python field names carry the original CSV headers
-as dataclass metadata. Supply every field using strings for values, or `None`
-for absent fields. `Invoice.empty()` creates an invoice with all fields null.
-Pydantic rejects incorrect types, missing fields and extra fields.
+must be the shared `Invoice` Pydantic dataclass in `src/ocr/models.py`. It carries
+binary `validity`, informative `diagnostic_type`, identity fields, tuples of
+`IvaLine` and `EquivalenceSurcharge`, optional `IrpfWithholding`, and `total`.
+`Invoice.unreadable()` creates the deterministic invalid result for documents
+with no usable text. Pydantic rejects incorrect types, missing fields and extras.
 
 Each OCR implementation implements `extract_text(path)`. The base class supplies
 two concrete methods; Surya and direct vision backends override `extract_invoice`:
@@ -349,7 +346,7 @@ two concrete methods; Surya and direct vision backends override `extract_invoice
 - `extract_invoice(path) -> Invoice`: runs OCR and passes its raw text to
   `parse_invoice`.
 - `parse_invoice(raw_text) -> Invoice`: calls the OpenAI Responses API using
-  `gpt-5-mini` and `responses.parse(text_format=Invoice)`. The SDK generates
+  `gpt-5.6-luna` and `responses.parse(text_format=Invoice)`. The SDK generates
   the strict schema, and Pydantic validates and parses the response directly
   into the shared Invoice dataclass.
 
@@ -363,30 +360,23 @@ text OCR with Surya does not require an API key. Surya sends OCR text/HTML and
 block geometry to OpenAI; the base parser sends raw text. Both disable response
 storage. The CSV reference data stays in the tests.
 
-Empty OCR text returns an empty Invoice without an API call. Unknown fields are
-null. API errors propagate; refusals, incomplete responses and invalid payloads
+Empty OCR text returns an invalid unreadable Invoice without an API call. Unknown
+fields are null. API errors propagate; refusals, incomplete responses and invalid payloads
 raise errors instead of returning partial invoices. The benchmark scores failed
 executions as zero and continues to the next image. The invoice benchmark runs
 real OCR and makes billable API requests; it does not mock predictions.
 
-The suite prints correct fields / 8 and accuracy for every image, followed
-by global accuracy (correct fields / all fields). While extraction is running,
-it prints the image name at the start and elapsed time every 30 seconds. These
-updates indicate a pending call, not guaranteed inference progress. There is no
-hard timeout for an entire image; backend request timeouts and retries can make
-an image take longer than any single request timeout. Both each image and the
-global score must be **strictly greater than 70%**; an image needs at least
-6/8 correct fields. Failed executions and invalid return models score 0/8
-and subsequent images still run. Mismatches show expected and actual values.
-Run without unittest's `-f` (fail fast) or `-b` (buffer output) options to see
-the complete report.
+The benchmark reports binary classification and field extraction separately.
+Failed executions remain visible and subsequent documents still run. `-s`
+keeps per-document progress visible while pytest is running.
 
 Comparison ignores surrounding/repeated whitespace and letter case, accepts
 DD/MM/YYYY and ISO dates, and compares numeric values exactly with Decimal.
 Spanish amounts such as `1.117,04 €` equal `1117.04`; `21,00%` equals `21`.
-Identifiers retain leading zeroes, punctuation and accents. Empty reference
-cells are scored as expected absence, not omitted. Reference amounts are
-used as recorded, without recalculating tax or totals.
+Identifiers retain leading zeroes, punctuation and accents. Whitespace inside
+`numero_factura` is ignored, so `E232-61145209` and `E232 - 61145209` compare
+equal. Empty reference cells are omitted from scoring. Reference amounts are
+used as recorded, except for documented in-memory document-total handling.
 
 The application and black-box tests import the shared extractor selected in
 `src/ocr/__init__.py`:
@@ -403,7 +393,7 @@ change that assignment; the tests require no changes. The shared
 instance is reused for all images and receives only document paths. An optional
 `OCR_IMAGE_DIR` overrides the directory containing the images.
 
-### Level-two benchmark
+### Dataset scopes
 
 The richer benchmark reads `tests/ground_truths/ocr_ground_truth_v2.csv`, groups
 repeated rows into one OCR execution per document, and keeps multiple fiscal
@@ -417,6 +407,8 @@ python -m pytest tests/test_invoice_accuracy_v2.py --ocr-scope review -s
 python -m pytest tests/test_invoice_accuracy_v2.py --ocr-scope all -s
 ```
 
+`-s` disables pytest's output capture so per-document progress and metrics are
+visible while the benchmark runs; it does not change selection or scoring.
 `OCR_TEST_SCOPE` provides the same selection for CI. `valid-invalid` excludes
 manual-review cases. `all` includes them, but review cases never enter the
 binary classification denominator. Classification has only `valid` and
@@ -434,13 +426,14 @@ document below `tests/results/v2/runs`, with a self-contained `dashboard.html`,
 `run.json`, `results.csv`, and `fields.csv`. Set `OCR_V2_REPORT_DIR` to override
 that directory.
 
-The production `Invoice` model is intentionally unchanged. The benchmark
-adapts its eight existing fields and treats classification, diagnostic type,
-IRPF, RE, and additional fiscal lines as absent until a future result wrapper
-exposes `document_status`, optional `diagnostic_type`, and optional `tax_lines`.
-Consequently the current extractor can still be measured for its existing
-fields, while missing annotated capabilities remain visible rather than being
-silently awarded credit.
+The production `Invoice` model exposes the same concepts the benchmark scores:
+binary validity, informative diagnostic type, all IVA lines, RE lines, optional
+IRPF, and the document total. Extraction is attempted for valid and invalid
+documents alike. Invalid classification never short-circuits field extraction.
+The application persists fiscal rows in normalized child tables; migration
+`0003_invoice_tax_lines` preserves an existing flat IVA row
+as line zero. Historical rows have no invented validity and must be reprocessed
+before they can be read through the strict domain model.
 
 Images are discovered recursively below that directory. Keep the CSV's image
 basenames unchanged when moving files into `easy/`, `medium/`, `hard/` or
@@ -449,15 +442,15 @@ category names also work. Files directly in the root are `uncategorized`. Duplic
 basenames are rejected so the benchmark cannot silently score the wrong image.
 The final console summary prints accuracy for each category followed by GLOBAL.
 
-## Results dashboard and execution history
+## Level-two results
 
 The same invoice test command now saves a local dashboard and CSV exports:
 
 ```shell
-python -m unittest tests.test_invoice_accuracy -v
+python -m pytest tests/test_invoice_accuracy_v2.py --ocr-scope all -s
 ```
 
-Open `tests/results/dashboard.html` in your browser, including while tests are
+Open `tests/results/v2/runs/<run-id>/dashboard.html` in your browser while tests are
 running. It requires no web server or external assets. The report includes:
 
 - Every invoice image, with rotation and zoom controls; HEIC files are saved as
@@ -470,35 +463,9 @@ running. It requires no web server or external assets. The report includes:
   averaging category percentages. Browser manual verdicts update this breakdown too.
 - Automatic refresh every ten seconds, which can be paused while inspecting.
 
-Select an execution and click **Rename run** to give it a memorable name. Save
-with the button or Enter; Cancel/Escape discards the edit. A blank name restores
-the default date label. Refresh pauses while the editor is open. Names persist
-in browser local storage across reloads, browser restarts and report regeneration
-at the same location. They appear in the selector and execution history. They
-are browser-specific, are not included in the JSON/CSV files, and are lost if
-browser storage is cleared. If browser storage is unavailable, the editor shows
-an error and retains the unsaved text.
-
-In **Field comparison**, use the **Verdict** dropdown to mark a scored field
-**Correct** or **Wrong** when automated comparison misclassifies it. Choose
-**Auto** to restore the original verdict. The invoice accuracy, global accuracy,
-field breakdown, filters and execution history immediately use your corrections.
-Manual verdicts and the original automated accuracy are labeled in the dashboard.
-Pending invoices and extraction errors without an obtained result cannot be
-manually scored.
-
-Like run names, corrections persist in browser local storage for this dashboard
-location, including after report regeneration. They do not edit expected/obtained
-values, ground truths, saved JSON/CSV files or unittest outcomes. CSV downloads
-continue to contain automated scores. Clearing browser storage removes manual
-verdicts. A storage failure leaves the previous score intact and shows an error.
-
-To verify the dashboard's manual scoring and persistence without OCR (requires
-Node.js):
-
-```shell
-node --test tests/test_invoice_dashboard.cjs
-```
+The dashboard shows classification, extraction accuracy, per-field metrics and
+both expected and obtained diagnostic types. It is a read-only view of the
+saved benchmark result; `diagnostic_type` remains informative and unscored.
 
 Results are saved after each image, before its pass/fail assertion. An extraction
 error counts as zero; pending images have no score. Partial-run accuracy is clearly
@@ -509,16 +476,12 @@ running; refresh activity alone does not indicate OCR progress.
 Each execution gets a unique directory; old results are preserved:
 
 ```text
-tests/results/
-  dashboard.html             All executions, with embedded report data
-  executions.csv             One row per execution, including accuracy and status
-  categories.csv             Per-category accuracy for every execution
+tests/results/v2/
   runs/<execution-id>/
     run.json                 Exact expected/obtained values and execution metadata
-    results.csv              One row per image: status, accuracy, timing and errors
+    dashboard.html           Self-contained result dashboard
+    results.csv              One row per document
     fields.csv               One row per field: expected, obtained and match flag
-    categories.csv           Category accuracy and scored/total invoice counts
-    images/                  JPEG snapshots for that execution
 ```
 
 CSV accuracy values are percentages (e.g. `75.0`). CSV exports use UTF-8 with a
@@ -526,53 +489,25 @@ BOM for Spanish text, and formula-like text is prefixed with an apostrophe for
 spreadsheet safety. `run.json` preserves exact values. When importing CSVs into
 Excel, select text columns for identifiers to preserve their leading zeroes.
 
-Use `OCR_REPORT_DIR` in your environment or `.env` to change the report directory.
+Use `OCR_V2_REPORT_DIR` in your environment or `.env` to change the report directory.
 Reports are ignored by Git in the default directory. Keep the entire results
 folder together when copying it, so the images and download links keep working.
 On Windows, a browser, spreadsheet application or antivirus may briefly lock an
-export file. The writer retries file replacement. If a dashboard or CSV remains
-locked, it logs a warning and continues the test; `run.json` is saved first and
-the export is retried on the next update. An inability to save the authoritative
-JSON still raises an error rather than silently losing results.
-
-After closing a program that holds an export open, regenerate the dashboard and
-all CSVs from the saved JSON without rerunning OCR or making API requests:
+export file. The writer retries atomic replacement before reporting the error.
+To test the scorer and report writer without running OCR:
 
 ```shell
-python -m tests.invoice_report --refresh
+python -m pytest tests/test_invoice_scoring_v2.py tests/test_invoice_report_v2.py -q
 ```
 
-Refresh also assigns categories to older saved runs that predate category
-tracking, using the current image folders (or `OCR_IMAGE_DIR`). The dashboard
-labels this assignment; predictions, scores and execution timestamps are retained.
-New runs snapshot their category at execution time, so moving images later does
-not change their history. Missing legacy categories display as `uncategorized`.
-
-Results from executions before this feature cannot be recovered from partial
-console output; new executions populate the history automatically.
-
-To generate an initial dashboard containing images and ground truths without
-calling OCR or any external API:
+Run the OCR adapter tests separately:
 
 ```shell
-python -m tests.invoice_report
+python -m pytest tests/test_ocr_surya.py tests/test_ocr_qwen.py tests/test_ocr_openai.py tests/test_ocr_abc.py -q
 ```
 
-The initial preview has no obtained values or accuracy and is excluded from
-execution history. To test the report writer itself without running OCR:
-
-```shell
-python -m unittest tests.test_invoice_report -v
-```
-
-Run fast unit tests of the scorer and the existing Surya adapter separately:
-
-```shell
-python -m unittest tests.test_invoice_scoring tests.test_ocr_surya tests.test_ocr_qwen tests.test_ocr_openai tests.test_ocr_abc -v
-```
-
-These use test doubles and do not measure OCR accuracy. Full discovery
-(`python -m unittest discover -s tests -v`) also includes the real-image
+These use test doubles and do not measure OCR accuracy. Full pytest discovery
+also includes the real-image
 benchmark and requires working OCR, an OpenAI API key and accuracy above the
 threshold. Actual inference may download models and take time.
 

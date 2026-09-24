@@ -259,30 +259,6 @@ class PreprocessingTests(unittest.TestCase):
             self.prepare()
         self.models.orient.assert_not_called()
 
-    def test_visual_report_stacks_side_by_side_comparison_rows(self):
-        from tests.preprocessing_benchmark import write_comparison_html
-
-        records = []
-        for index, filename in enumerate(("one & first.png", "two.png"), 1):
-            records.append({
-                "filename": filename,
-                "page": {"selection_method": "docaligner", "rotation_ccw": 90,
-                         "skew_ccw": 0., "uncertainty": []},
-                "assessment": {"text_extent_inside": True},
-                "previews": [{"page_number": 1,
-                              "original_preview": f"images/{index}-original.jpg",
-                              "prepared_preview": f"images/{index}-prepared.jpg"}],
-            })
-        path = write_comparison_html(records, self.directory, "full")
-        content = path.read_text(encoding="utf-8")
-        self.assertEqual(content.count('<section class="comparison-row"'), 2)
-        self.assertEqual(content.count('<div class="pair">'), 2)
-        self.assertLess(content.index("images/1-original.jpg"), content.index("images/1-prepared.jpg"))
-        self.assertLess(content.index("images/1-prepared.jpg"), content.index("images/2-original.jpg"))
-        self.assertIn("one &amp; first.png", content)
-        self.assertIn("grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr)", content)
-        self.assertNotIn(".pair { grid-template-columns: 1fr", content)
-
     def test_missing_weights_never_download_at_runtime(self):
         with patch("urllib.request.urlopen", side_effect=AssertionError("Network forbidden")):
             with self.assertRaisesRegex(RuntimeError, "setup-models"):

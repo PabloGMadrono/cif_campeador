@@ -17,9 +17,10 @@ from sqlalchemy import (
     Text,
     Uuid,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from src.invoices.domain import DocumentStatus, FailureStage, MessageType
+from src.ocr.models import InvoiceValidity
 
 NAMING_CONVENTION = {
     "ix": "ix_%(column_0_label)s",
@@ -128,12 +129,58 @@ class InvoiceRecord(Base):
         ForeignKey("invoice_submissions.id", ondelete="CASCADE"),
         primary_key=True,
     )
+    validity: Mapped[InvoiceValidity | None] = mapped_column(
+        Enum(
+            InvoiceValidity,
+            native_enum=False,
+            length=16,
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
+        index=True,
+    )
+    diagnostic_type: Mapped[str | None] = mapped_column(String(255))
     fecha: Mapped[str | None] = mapped_column(String(64))
     numero_factura: Mapped[str | None] = mapped_column(String(255))
     nif_proveedor: Mapped[str | None] = mapped_column(String(64))
     nombre_proveedor: Mapped[str | None] = mapped_column(String(255))
+    base_retencion: Mapped[str | None] = mapped_column(String(64))
+    tipo_irpf: Mapped[str | None] = mapped_column(String(64))
+    cuota_irpf: Mapped[str | None] = mapped_column(String(64))
+    total: Mapped[str | None] = mapped_column(String(64))
+    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    iva_lines: Mapped[list[InvoiceIvaLineRecord]] = relationship(
+        cascade="all, delete-orphan",
+        order_by="InvoiceIvaLineRecord.position",
+    )
+    equivalence_surcharges: Mapped[list[InvoiceEquivalenceSurchargeRecord]] = relationship(
+        cascade="all, delete-orphan",
+        order_by="InvoiceEquivalenceSurchargeRecord.position",
+    )
+
+
+class InvoiceIvaLineRecord(Base):
+    __tablename__ = "invoice_iva_lines"
+
+    document_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("invoices.document_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
     base_imponible: Mapped[str | None] = mapped_column(String(64))
     tipo_iva: Mapped[str | None] = mapped_column(String(64))
     cuota_iva: Mapped[str | None] = mapped_column(String(64))
-    total: Mapped[str | None] = mapped_column(String(64))
-    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class InvoiceEquivalenceSurchargeRecord(Base):
+    __tablename__ = "invoice_equivalence_surcharges"
+
+    document_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("invoices.document_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    base_imponible: Mapped[str | None] = mapped_column(String(64))
+    tipo_re: Mapped[str | None] = mapped_column(String(64))
+    cuota_re: Mapped[str | None] = mapped_column(String(64))

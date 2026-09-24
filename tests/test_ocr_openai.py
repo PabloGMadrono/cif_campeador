@@ -16,8 +16,9 @@ from openai import AuthenticationError, OpenAI
 from PIL import Image, UnidentifiedImageError
 from pillow_heif import register_heif_opener
 
-from src.ocr.models import Invoice
+from src.ocr.models import Invoice, IvaLine
 from src.ocr.ocr_openai import Ocr_openai
+from tests.invoice_fixtures import make_invoice
 
 
 class OpenAIOcrTests(unittest.TestCase):
@@ -30,10 +31,11 @@ class OpenAIOcrTests(unittest.TestCase):
         self.path = Path(temporary.name) / "invoice.png"
         with Image.new("RGB", (20, 30), "white") as image:
             image.save(self.path)
-        self.expected = Invoice(
+        self.expected = make_invoice(
             fecha="2022-08-09", numero_factura="000123", nif_proveedor=None,
-            nombre_proveedor="Compañía S.L.", base_imponible="10.00",
-            tipo_iva="21", cuota_iva="2.10", total="12.10",
+            nombre_proveedor="Compañía S.L.",
+            lineas_iva=(IvaLine("10.00", "21", "2.10"),),
+            total="12.10",
         )
         self.response = {
             "id": "resp_test", "object": "response", "created_at": 0,
@@ -100,8 +102,8 @@ class OpenAIOcrTests(unittest.TestCase):
         self.assertEqual(set(schema["required"]), names)
         self.assertEqual(set(schema["properties"]), names)
         self.assertFalse(schema["additionalProperties"])
-        for property_ in schema["properties"].values():
-            self.assertEqual({branch["type"] for branch in property_["anyOf"]}, {"string", "null"})
+        self.assertEqual(schema["properties"]["lineas_iva"]["type"], "array")
+        self.assertIn("$defs", schema)
 
     def test_heic_is_converted_to_base64_png(self):
         register_heif_opener(thumbnails=False)
@@ -161,8 +163,8 @@ class OpenAIOcrTests(unittest.TestCase):
         self.assertEqual(body["input"], [{"role": "user", "content": "Factura 000123"}])
 
     def test_blank_invoice_uses_one_call_and_returns_all_null_fields(self):
-        self.set_output(json.dumps(asdict(Invoice.empty())))
-        self.assertEqual(self.ocr.extract_invoice(str(self.path)), Invoice.empty())
+        self.set_output(json.dumps(asdict(Invoice.unreadable())))
+        self.assertEqual(self.ocr.extract_invoice(str(self.path)), Invoice.unreadable())
         self.assertEqual(len(self.requests), 1)
 
     def test_bad_inputs_fail_before_creating_a_client(self):

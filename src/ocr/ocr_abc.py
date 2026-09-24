@@ -9,7 +9,6 @@ from src.config import OPENAI_API_KEY
 
 from .models import Invoice
 
-
 ParsedT = TypeVar("ParsedT")
 
 
@@ -35,20 +34,24 @@ INVOICE_FIELD_INSTRUCTIONS = """Return null for missing or unreadable
 fields; do not guess. Extract the supplier's name and tax ID, not the customer's.
 Preserve invoice identifiers, leading zeroes, punctuation, and supplier names.
 Return dates as YYYY-MM-DD when unambiguous. Return monetary amounts as decimal
-strings in euros without currency symbols or thousands separators. Return VAT
-rates in percentage points (21 for 21%, not 0.21). Use the printed taxable base,
-VAT amount and total; do not recalculate or correct those monetary fields.
-For tipo_iva, use a printed single overall VAT rate when available. If several
-VAT rates are listed without a single overall rate, calculate the effective
-overall percentage as 100 * sum(printed VAT amounts) / sum(their corresponding
-printed taxable bases), rounded to two decimal places. This calculation is an
-explicit exception to extracting only printed values. Use each VAT breakdown
-row once; do not also count subtotals or grand totals. Do not use the unweighted
-arithmetic mean of the rates or divide by the VAT-inclusive payment total.
-Exclude donations and other amounts outside those VAT rows. For example, bases
-of 100.00 at 10% and 50.00 at 21%, with VAT amounts of 10.00 and 10.50, give
-tipo_iva = "13.67". If the required bases or VAT amounts are missing or unreadable,
-or the combined taxable base is zero, return null for tipo_iva; do not guess.
+strings in euros without currency symbols or thousands separators. Return tax
+rates in percentage points (21 for 21%, not 0.21). Use only printed values; do
+not calculate, aggregate, or correct monetary or percentage fields.
+
+Classify every document with validity valid or invalid. Valid documents are
+invoices, simplified invoices/fiscal receipts, and rectifying invoices. Invalid
+documents include proformas, pretickets, card-terminal/payment slips without an
+invoice, non-invoice documents, and documents too unreadable to establish that
+they are invoices. Never return review. diagnostic_type is a short optional
+informative label and does not need to use a fixed vocabulary. Classification
+must not stop extraction: return every readable field even for invalid documents.
+
+Create one lineas_iva item for each printed VAT breakdown row. Create one
+recargos_equivalencia item for each explicitly printed RE breakdown; never put
+IVA values in RE fields. Return empty arrays when those concepts are absent.
+Return retencion_irpf only when IRPF is explicitly printed, preserve a printed
+negative sign in cuota_irpf, and otherwise return null. Do not infer IRPF from
+the supplier type. Do not create fiscal objects whose every field is null.
 When several identifiers are present, prefer an explicitly labelled invoice or
 simplified-invoice number. Use a ticket, operation, transaction, reference or
 receipt number only when the context identifies it as this document's number;
@@ -85,13 +88,13 @@ class Ocr_operator(ABC):
     def parse_invoice(self, raw_text: str) -> Invoice:
         """Convert raw OCR text through GPT-5 mini's structured Responses API.
 
-        An empty OCR result returns an empty Invoice without making an API call.
+        An empty OCR result returns an invalid unreadable result without an API call.
         Refusals, incomplete responses and malformed payloads raise RuntimeError.
         """
         if not isinstance(raw_text, str):
             raise TypeError("OCR text must be a string")
         if not raw_text.strip():
-            return Invoice.empty()
+            return Invoice.unreadable()
 
         return self._parse_structured(raw_text, INVOICE_INSTRUCTIONS, Invoice)
 

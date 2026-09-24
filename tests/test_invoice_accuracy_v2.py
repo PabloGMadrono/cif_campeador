@@ -7,11 +7,12 @@ from pathlib import Path
 from time import monotonic
 
 from src.ocr import invoice_extractor
-from tests.invoice_accuracy import PASS_THRESHOLD, image_index, resolve_image
 from tests.invoice_accuracy_v2 import (
     OcrScope,
     filter_scope,
+    image_index,
     load_ground_truths_v2,
+    resolve_image,
     score_document,
     summarize_scores,
 )
@@ -21,6 +22,7 @@ TESTS = Path(__file__).resolve().parent
 GROUND_TRUTH = TESTS / "ground_truths" / "ocr_ground_truth_v2.csv"
 DEFAULT_IMAGE_DIRECTORY = TESTS / "images"
 DEFAULT_REPORT_DIRECTORY = TESTS / "results" / "v2"
+PASS_THRESHOLD = 0.70
 
 
 def _resolve_v2_image(directory: Path, filename: str) -> Path:
@@ -83,11 +85,10 @@ def test_invoice_accuracy_v2(ocr_scope: OcrScope):
                 extract_with_evidence = getattr(
                     invoice_extractor, "extract_invoice_with_evidence", None
                 )
-                actual = (
-                    extract_with_evidence(str(source_path))
-                    if callable(extract_with_evidence)
-                    else invoice_extractor.extract_invoice(str(source_path))
-                )
+                if callable(extract_with_evidence):
+                    actual = extract_with_evidence(str(source_path)).invoice
+                else:
+                    actual = invoice_extractor.extract_invoice(str(source_path))
             except Exception as error:  # noqa: BLE001 - every backend failure belongs in the report
                 error_text = f"{type(error).__name__}: {error}"
                 errors.append(f"{expected.filename}: {error_text}")

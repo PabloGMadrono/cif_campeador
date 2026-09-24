@@ -1,34 +1,23 @@
-"""Level-two OCR ground truths and scoring, independent of an OCR backend.
-
-The production ``Invoice`` model deliberately remains unchanged.  This module
-adapts its current eight fields to the richer benchmark and can also consume a
-future result wrapper exposing ``document_status``, ``diagnostic_type`` and
-``tax_lines``.
-"""
+"""Ground-truth loading and scoring for the level-two OCR benchmark."""
 
 from __future__ import annotations
 
 import csv
 import re
 import unicodedata
-from collections.abc import Iterable
-from dataclasses import asdict, dataclass, fields
+from collections.abc import Iterable, Sequence
+from dataclasses import asdict, dataclass
 from datetime import date
 from decimal import Decimal
-from enum import Enum
+from enum import StrEnum
 from functools import cache
 from pathlib import Path
 from typing import Any
 
-from src.ocr.models import Invoice
+from src.ocr.models import Invoice, InvoiceValidity
 
 
-class DocumentStatus(str, Enum):
-    VALID = "valid"
-    INVALID = "invalid"
-
-
-class OcrScope(str, Enum):
+class OcrScope(StrEnum):
     VALID = "valid"
     INVALID = "invalid"
     VALID_INVALID = "valid-invalid"
@@ -41,9 +30,28 @@ class OcrScope(str, Enum):
         if self is OcrScope.REVIEW:
             return document.review_required
         if self is OcrScope.VALID_INVALID:
-            return document.status is not None
-        expected = DocumentStatus(self.value)
-        return document.status is expected
+            return document.validity is not None
+        return document.validity is InvoiceValidity(self.value)
+
+
+def image_index(directory: Path) -> dict[str, list[Path]]:
+    """Index files recursively by case-insensitive basename."""
+    index: dict[str, list[Path]] = {}
+    for path in sorted(Path(directory).rglob("*")):
+        if path.is_file():
+            index.setdefault(path.name.casefold(), []).append(path)
+    return index
+
+
+def resolve_image(directory: Path, filename: str, index: dict[str, list[Path]]) -> Path:
+    """Resolve one unique basename, retaining a useful path when it is absent."""
+    matches = index.get(filename.casefold(), [])
+    if len(matches) > 1:
+        raise ValueError(
+            f"Ambiguous invoice image {filename}: "
+            + ", ".join(str(path) for path in matches)
+        )
+    return matches[0] if matches else Path(directory) / filename
 
 
 DOCUMENT_FIELDS = (
@@ -51,27 +59,44 @@ DOCUMENT_FIELDS = (
     ("numero_factura", "Nº de factura"),
     ("nif_proveedor", "NIF proveedor"),
     ("nombre_proveedor", "Nombre Proveedor"),
+    ("total", "Total"),
 )
-TAX_FIELDS = (
-    ("tipo_re", "RE"),
-    ("cuota_re", "Cuota RE"),
-    ("tipo_irpf", "Tipo IRPF"),
-    ("cuota_irpf", "Cuota IRPF"),
+VAT_FIELDS = (
     ("base_imponible", "Base Imponible"),
     ("tipo_iva", "Tipo IVA %"),
     ("cuota_iva", "Cuota IVA"),
-    ("total", "Total"),
 )
-FIELD_LABELS = dict(DOCUMENT_FIELDS + TAX_FIELDS)
+RE_FIELDS = (
+    ("base_imponible", "Base Imponible RE"),
+    ("tipo_re", "RE"),
+    ("cuota_re", "Cuota RE"),
+)
+IRPF_FIELDS = (
+    ("base_retencion", "Base retención IRPF"),
+    ("tipo_irpf", "Tipo IRPF"),
+    ("cuota_irpf", "Cuota IRPF"),
+)
+SUMMARY_FIELDS = (
+    DOCUMENT_FIELDS
+    + tuple((f"lineas_iva.{name}", label) for name, label in VAT_FIELDS)
+    + tuple(
+        (f"recargos_equivalencia.{name}", label) for name, label in RE_FIELDS
+    )
+    + tuple((f"retencion_irpf.{name}", label) for name, label in IRPF_FIELDS)
+)
+FIELD_LABELS = {}
+for field_name, field_label in DOCUMENT_FIELDS + VAT_FIELDS + RE_FIELDS + IRPF_FIELDS:
+    FIELD_LABELS.setdefault(field_name, field_label)
 NUMERIC_FIELDS = {
-    "tipo_re",
-    "cuota_re",
-    "tipo_irpf",
-    "cuota_irpf",
+    "total",
     "base_imponible",
     "tipo_iva",
     "cuota_iva",
-    "total",
+    "tipo_re",
+    "cuota_re",
+    "base_retencion",
+    "tipo_irpf",
+    "cuota_irpf",
 }
 MISSING_MARKERS = {"", "-"}
 CSV_COLUMNS = {
@@ -95,21 +120,30 @@ CSV_COLUMNS = {
 
 
 @dataclass(frozen=True)
-class TaxLine:
-    tipo_re: str | None
-    cuota_re: str | None
-    tipo_irpf: str | None
-    cuota_irpf: str | None
+class GroundTruthIvaLine:
     base_imponible: str | None
     tipo_iva: str | None
     cuota_iva: str | None
-    total: str | None
+
+
+@dataclass(frozen=True)
+class GroundTruthSurcharge:
+    base_imponible: str | None
+    tipo_re: str | None
+    cuota_re: str | None
+
+
+@dataclass(frozen=True)
+class GroundTruthWithholding:
+    base_retencion: str | None
+    tipo_irpf: str | None
+    cuota_irpf: str | None
 
 
 @dataclass(frozen=True)
 class GroundTruthDocument:
     filename: str
-    status: DocumentStatus | None
+    validity: InvoiceValidity | None
     review_required: bool
     diagnostic_type: str | None
     notes: str | None
@@ -117,7 +151,12 @@ class GroundTruthDocument:
     numero_factura: str | None
     nif_proveedor: str | None
     nombre_proveedor: str | None
-    tax_lines: tuple[TaxLine, ...]
+    lineas_iva: tuple[GroundTruthIvaLine, ...]
+    recargos_equivalencia: tuple[GroundTruthSurcharge, ...]
+    retencion_irpf: GroundTruthWithholding | None
+    total: str | None
+    raw_row_totals: tuple[str | None, ...]
+    total_derivation: str
 
 
 @dataclass(frozen=True)
@@ -157,8 +196,8 @@ class ExtractionScore:
 
 @dataclass(frozen=True)
 class ClassificationScore:
-    expected: DocumentStatus | None
-    obtained: DocumentStatus | None
+    expected: InvoiceValidity | None
+    obtained: InvoiceValidity | None
 
     @property
     def scored(self) -> bool:
@@ -183,7 +222,6 @@ def is_annotated(value: str | None) -> bool:
 
 
 def normalize_field(name: str, value: str | None):
-    """Normalize an annotated value; missing markers share one representation."""
     if value is None:
         return None
     if not isinstance(value, str):
@@ -191,15 +229,16 @@ def normalize_field(name: str, value: str | None):
     value = " ".join(unicodedata.normalize("NFC", value).casefold().split())
     if value in MISSING_MARKERS:
         return None
+    if name == "numero_factura":
+        return "".join(value.split())
     if name == "fecha":
         try:
             if re.fullmatch(r"\d{1,2}/\d{1,2}/\d{4}", value):
                 day, month, year = map(int, value.split("/"))
                 return date(year, month, day)
             return date.fromisoformat(value)
-        except ValueError:
-            pass
-        raise ValueError(f"Invalid invoice date: {value!r}")
+        except ValueError as error:
+            raise ValueError(f"Invalid invoice date: {value!r}") from error
     if name in NUMERIC_FIELDS:
         value = value.removesuffix("%").removesuffix("€").strip()
         if re.fullmatch(r"[+-]?(?:\d+|\d{1,3}(?:\.\d{3})+),\d+", value):
@@ -208,10 +247,36 @@ def normalize_field(name: str, value: str | None):
             raise ValueError(f"Invalid numeric field {name}: {value!r}")
         return Decimal(value)
     if name == "nombre_proveedor":
-        # Supplier punctuation is non-critical. Removing rather than replacing
-        # punctuation makes both "S.L." and "SL" equivalent.
-        return re.sub(r"[.,]", "", value)
+        return "".join(re.sub(r"[.,]", "", value).split())
     return value
+
+
+def supplier_names_match(expected: str, obtained: str | None) -> bool:
+    if obtained is None:
+        return False
+    if normalize_field("nombre_proveedor", expected) == normalize_field(
+        "nombre_proveedor", obtained
+    ):
+        return True
+
+    expected_words = _supplier_name_words(expected)
+    obtained_words = _supplier_name_words(obtained)
+    if not expected_words or not obtained_words:
+        return False
+
+    shorter, longer = sorted((expected_words, obtained_words), key=len)
+    width = len(shorter)
+    return any(longer[index : index + width] == shorter for index in range(len(longer) - width + 1))
+
+
+def _supplier_name_words(value: str) -> tuple[str, ...]:
+    words = re.findall(r"[^\W_]+", unicodedata.normalize("NFC", value).casefold())
+    legal_forms = {"sa", "sal", "sl", "slu", "slne"}
+    return tuple(
+        word
+        for word in words
+        if len(word) > 1 and not any(character.isdigit() for character in word) and word not in legal_forms
+    )
 
 
 def _reference_value(name: str, raw: str, line: int) -> str | None:
@@ -227,227 +292,313 @@ def _reference_value(name: str, raw: str, line: int) -> str | None:
     return value
 
 
-def _ground_truth_status(raw: str, line: int) -> tuple[DocumentStatus | None, bool]:
+def _ground_truth_status(raw: str, line: int) -> tuple[InvoiceValidity | None, bool]:
     value = unicodedata.normalize("NFC", raw).strip().casefold()
     if value == "válida":
-        return DocumentStatus.VALID, False
+        return InvoiceValidity.VALID, False
     if value == "no válida":
-        return DocumentStatus.INVALID, False
+        return InvoiceValidity.INVALID, False
     if value == "revisar":
         return None, True
     raise ValueError(f"Unknown Deducible value on ground-truth row {line}: {raw!r}")
 
 
+def _decimal(value: str | None) -> Decimal | None:
+    normalized = normalize_field("total", value)
+    return normalized if isinstance(normalized, Decimal) else None
+
+
+def _document_total(rows: list[dict[str, Any]]) -> tuple[str | None, str]:
+    totals = [row["total"] for row in rows]
+    if len(rows) == 1:
+        return totals[0], "printed"
+    if all(total == totals[0] for total in totals):
+        return totals[0], "repeated"
+    if any(total is None for total in totals):
+        return None, "ambiguous"
+    for row in rows:
+        components = (row["base_imponible"], row["cuota_iva"], row["cuota_re"])
+        values = [_decimal(value) for value in components if value is not None]
+        if not values or sum(values) != _decimal(row["total"]):
+            return None, "ambiguous"
+    total = sum(_decimal(value) for value in totals if value is not None)
+    return format(total, "f"), "summed_tax_subtotals"
+
+
 def load_ground_truths_v2(path: Path) -> list[GroundTruthDocument]:
-    """Load and group v2 rows, preserving multiple fiscal lines per image."""
+    """Load the untouched CSV and group its repeated fiscal rows by document."""
     grouped: dict[str, dict[str, Any]] = {}
     with Path(path).open(encoding="utf-8-sig", newline="") as source:
         reader = csv.DictReader(source)
-        original_headers = reader.fieldnames or []
-        headers = [header.strip() for header in original_headers]
+        headers = [header.strip() for header in (reader.fieldnames or [])]
         if len(headers) != len(CSV_COLUMNS) or set(headers) != CSV_COLUMNS:
             raise ValueError(f"Unexpected v2 ground-truth columns: {headers}")
         reader.fieldnames = headers
-        for line, row in enumerate(reader, start=2):
+        for line_number, row in enumerate(reader, start=2):
             if None in row or any(value is None for value in row.values()):
-                raise ValueError(f"Malformed v2 ground-truth row {line}")
+                raise ValueError(f"Malformed v2 ground-truth row {line_number}")
             filename = row["Nombre foto"].strip()
             if not filename:
-                raise ValueError(f"Missing image on ground-truth row {line}")
-            status, review_required = _ground_truth_status(row["Deducible"], line)
-            diagnostic_type = row["Tipo"].strip() or None
-            notes = row["Notas"].strip() or None
-            document_values = {
-                name: _reference_value(name, row[label], line)
-                for name, label in DOCUMENT_FIELDS
-            }
-            tax_line = TaxLine(
-                **{
-                    name: _reference_value(name, row[label], line)
-                    for name, label in TAX_FIELDS
-                }
+                raise ValueError(f"Missing image on ground-truth row {line_number}")
+            validity, review_required = _ground_truth_status(
+                row["Deducible"], line_number
             )
+            document_values = {
+                name: _reference_value(name, row[label], line_number)
+                for name, label in DOCUMENT_FIELDS[:-1]
+            }
+            fiscal = {
+                "base_imponible": _reference_value(
+                    "base_imponible", row["Base Imponible"], line_number
+                ),
+                "tipo_iva": _reference_value(
+                    "tipo_iva", row["Tipo IVA %"], line_number
+                ),
+                "cuota_iva": _reference_value(
+                    "cuota_iva", row["Cuota IVA"], line_number
+                ),
+                "tipo_re": _reference_value("tipo_re", row["RE"], line_number),
+                "cuota_re": _reference_value(
+                    "cuota_re", row["Cuota RE"], line_number
+                ),
+                "tipo_irpf": _reference_value(
+                    "tipo_irpf", row["Tipo IRPF"], line_number
+                ),
+                "cuota_irpf": _reference_value(
+                    "cuota_irpf", row["Cuota IRPF"], line_number
+                ),
+                "total": _reference_value("total", row["Total"], line_number),
+            }
             identity = filename.casefold()
+            stable = {
+                "validity": validity,
+                "review_required": review_required,
+                "diagnostic_type": row["Tipo"].strip() or None,
+                **document_values,
+            }
             if identity not in grouped:
                 grouped[identity] = {
                     "filename": filename,
-                    "status": status,
-                    "review_required": review_required,
-                    "diagnostic_type": diagnostic_type,
-                    "notes": notes,
-                    **document_values,
-                    "tax_lines": [tax_line],
+                    **stable,
+                    "notes": row["Notas"].strip() or None,
+                    "rows": [fiscal],
                 }
                 continue
             current = grouped[identity]
-            stable = {
-                "status": status,
-                "review_required": review_required,
-                "diagnostic_type": diagnostic_type,
-                **document_values,
-            }
-            conflicts = [
-                name for name, value in stable.items() if current[name] != value
-            ]
+            conflicts = [name for name, value in stable.items() if current[name] != value]
             if conflicts:
                 raise ValueError(
-                    f"Conflicting document values for {filename!r} on row {line}: "
+                    f"Conflicting document values for {filename!r} on row {line_number}: "
                     + ", ".join(conflicts)
                 )
+            notes = row["Notas"].strip() or None
             if notes and current["notes"] and notes != current["notes"]:
-                raise ValueError(f"Conflicting notes for {filename!r} on row {line}")
+                raise ValueError(f"Conflicting notes for {filename!r} on row {line_number}")
             current["notes"] = current["notes"] or notes
-            current["tax_lines"].append(tax_line)
-    if not grouped:
+            current["rows"].append(fiscal)
+
+    documents = []
+    for values in grouped.values():
+        rows = values.pop("rows")
+        total, total_derivation = _document_total(rows)
+        iva_lines = tuple(
+            GroundTruthIvaLine(
+                row["base_imponible"], row["tipo_iva"], row["cuota_iva"]
+            )
+            for row in rows
+            if any(row[name] is not None for name, _ in VAT_FIELDS)
+        )
+        surcharges = tuple(
+            GroundTruthSurcharge(
+                row["base_imponible"], row["tipo_re"], row["cuota_re"]
+            )
+            for row in rows
+            if row["tipo_re"] is not None or row["cuota_re"] is not None
+        )
+        withholding_rows = [
+            row
+            for row in rows
+            if row["tipo_irpf"] is not None or row["cuota_irpf"] is not None
+        ]
+        if len(withholding_rows) > 1:
+            raise ValueError(f"Multiple IRPF rows for {values['filename']!r}")
+        withholding = None
+        if withholding_rows:
+            row = withholding_rows[0]
+            withholding = GroundTruthWithholding(
+                row["base_imponible"], row["tipo_irpf"], row["cuota_irpf"]
+            )
+        documents.append(
+            GroundTruthDocument(
+                **values,
+                lineas_iva=iva_lines,
+                recargos_equivalencia=surcharges,
+                retencion_irpf=withholding,
+                total=total,
+                raw_row_totals=tuple(row["total"] for row in rows),
+                total_derivation=total_derivation,
+            )
+        )
+    if not documents:
         raise ValueError("Ground-truth v2 CSV contains no documents")
-    return [
-        GroundTruthDocument(**{**values, "tax_lines": tuple(values["tax_lines"])})
-        for values in grouped.values()
-    ]
+    return documents
 
 
 def filter_scope(
-    documents: Iterable[GroundTruthDocument],
-    scope: OcrScope | str,
+    documents: Iterable[GroundTruthDocument], scope: OcrScope | str
 ) -> list[GroundTruthDocument]:
     selected = OcrScope(scope)
     return [document for document in documents if selected.includes(document)]
 
 
-def _value(source: Any, name: str) -> Any:
-    if source is None:
-        return None
-    if isinstance(source, dict):
-        return source.get(name)
-    return getattr(source, name, None)
-
-
-def _parse_status(value: Any) -> DocumentStatus | None:
-    if value is None:
-        return None
-    if isinstance(value, DocumentStatus):
-        return value
+def _compare(name: str, expected: str, obtained: str | None) -> bool:
     try:
-        return DocumentStatus(str(value).strip().casefold())
-    except ValueError:
-        return None
-
-
-def _actual_parts(
-    actual: Any,
-) -> tuple[Any, list[Any], DocumentStatus | None, str | None]:
-    if isinstance(actual, Invoice):
-        invoice = actual
-        tax_lines = [actual]
-    else:
-        invoice = _value(actual, "invoice")
-        explicit_lines = _value(actual, "tax_lines")
-        tax_lines = (
-            list(explicit_lines)
-            if explicit_lines is not None
-            else ([invoice] if invoice else [])
-        )
-    status = _parse_status(_value(actual, "document_status"))
-    diagnostic = _value(actual, "diagnostic_type")
-    return invoice, tax_lines, status, str(diagnostic).strip() if diagnostic else None
-
-
-def _compare(name: str, expected: str, obtained: Any) -> bool:
-    try:
+        if name == "nombre_proveedor":
+            return supplier_names_match(expected, obtained)
         return normalize_field(name, obtained) == normalize_field(name, expected)
     except (TypeError, ValueError):
         return False
 
 
-def _line_match_count(expected: TaxLine, obtained: Any) -> int:
+def _line_match_count(
+    expected: Any, obtained: Any, field_definitions: Sequence[tuple[str, str]]
+) -> int:
     return sum(
-        _compare(name, value, _value(obtained, name))
-        for name, _ in TAX_FIELDS
+        _compare(name, value, getattr(obtained, name, None))
+        for name, _ in field_definitions
         if (value := getattr(expected, name)) is not None
     )
 
 
 def _best_line_assignment(
-    expected: tuple[TaxLine, ...], obtained: list[Any]
+    expected: Sequence[Any],
+    obtained: Sequence[Any],
+    field_definitions: Sequence[tuple[str, str]],
 ) -> tuple[int | None, ...]:
-    """Pair tax lines one-to-one to maximize matched annotated fields."""
-
     @cache
-    def visit(
-        expected_index: int, used: tuple[int, ...]
-    ) -> tuple[int, tuple[int | None, ...]]:
-        if expected_index == len(expected):
+    def visit(index: int, used: tuple[int, ...]) -> tuple[int, tuple[int | None, ...]]:
+        if index == len(expected):
             return 0, ()
-        used_set = set(used)
-        choices: list[tuple[int, tuple[int | None, ...]]] = []
-        remaining_score, remaining_assignment = visit(expected_index + 1, used)
-        choices.append((remaining_score, (None,) + remaining_assignment))
-        for obtained_index, actual_line in enumerate(obtained):
-            if obtained_index in used_set:
+        choices = []
+        tail_score, tail = visit(index + 1, used)
+        choices.append((tail_score, (None,) + tail))
+        for actual_index, actual_line in enumerate(obtained):
+            if actual_index in used:
                 continue
-            tail_score, tail_assignment = visit(
-                expected_index + 1, tuple(sorted((*used, obtained_index)))
+            tail_score, tail = visit(index + 1, tuple(sorted((*used, actual_index))))
+            choices.append(
+                (
+                    _line_match_count(expected[index], actual_line, field_definitions)
+                    + tail_score,
+                    (actual_index,) + tail,
+                )
             )
-            score = (
-                _line_match_count(expected[expected_index], actual_line) + tail_score
-            )
-            choices.append((score, (obtained_index,) + tail_assignment))
         return max(
             choices,
             key=lambda choice: (
                 choice[0],
-                sum(index is not None for index in choice[1]),
+                sum(item is not None for item in choice[1]),
             ),
         )
 
     return visit(0, ())[1]
 
 
-def score_document(actual: Any, expected: GroundTruthDocument) -> DocumentScore:
-    invoice, actual_lines, actual_status, diagnostic_type = _actual_parts(actual)
+def _score_value(
+    results: list[FieldResult],
+    key: str,
+    name: str,
+    expected: str | None,
+    obtained: str | None,
+    *,
+    metric_name: str | None = None,
+) -> None:
+    if expected is None:
+        return
+    results.append(
+        FieldResult(
+            key,
+            metric_name or name,
+            expected,
+            obtained,
+            _compare(name, expected, obtained),
+        )
+    )
+
+
+def _score_lines(
+    results: list[FieldResult],
+    key: str,
+    expected: Sequence[Any],
+    obtained: Sequence[Any],
+    field_definitions: Sequence[tuple[str, str]],
+) -> None:
+    assignment = _best_line_assignment(expected, obtained, field_definitions)
+    for line_index, (expected_line, actual_index) in enumerate(zip(expected, assignment)):
+        actual_line = obtained[actual_index] if actual_index is not None else None
+        for name, _ in field_definitions:
+            _score_value(
+                results,
+                f"{key}[{line_index}].{name}",
+                name,
+                getattr(expected_line, name),
+                getattr(actual_line, name, None),
+                metric_name=f"{key}.{name}",
+            )
+
+
+def score_document(actual: Invoice | None, expected: GroundTruthDocument) -> DocumentScore:
+    if actual is not None and not isinstance(actual, Invoice):
+        raise TypeError(f"Expected Invoice or None, got {type(actual).__name__}")
     results: list[FieldResult] = []
     for name, _ in DOCUMENT_FIELDS:
-        reference = getattr(expected, name)
-        if reference is None:
-            continue
-        obtained = _value(invoice, name)
-        results.append(
-            FieldResult(
-                key=name,
-                field=name,
-                expected=reference,
-                obtained=obtained,
-                matched=_compare(name, reference, obtained),
-            )
+        _score_value(
+            results,
+            name,
+            name,
+            getattr(expected, name),
+            getattr(actual, name, None),
         )
-    assignment = _best_line_assignment(expected.tax_lines, actual_lines)
-    for line_index, (expected_line, actual_index) in enumerate(
-        zip(expected.tax_lines, assignment)
-    ):
-        actual_line = actual_lines[actual_index] if actual_index is not None else None
-        for name, _ in TAX_FIELDS:
-            reference = getattr(expected_line, name)
-            if reference is None:
-                continue
-            obtained = _value(actual_line, name)
-            results.append(
-                FieldResult(
-                    key=f"tax_lines[{line_index}].{name}",
-                    field=name,
-                    expected=reference,
-                    obtained=obtained,
-                    matched=_compare(name, reference, obtained),
-                )
+    _score_lines(
+        results,
+        "lineas_iva",
+        expected.lineas_iva,
+        actual.lineas_iva if actual else (),
+        VAT_FIELDS,
+    )
+    _score_lines(
+        results,
+        "recargos_equivalencia",
+        expected.recargos_equivalencia,
+        actual.recargos_equivalencia if actual else (),
+        RE_FIELDS,
+    )
+    if expected.retencion_irpf:
+        for name, _ in IRPF_FIELDS:
+            _score_value(
+                results,
+                f"retencion_irpf.{name}",
+                name,
+                getattr(expected.retencion_irpf, name),
+                getattr(actual.retencion_irpf, name, None)
+                if actual and actual.retencion_irpf
+                else None,
+                metric_name=f"retencion_irpf.{name}",
             )
+    possible_fields = (
+        len(DOCUMENT_FIELDS)
+        + len(VAT_FIELDS) * len(expected.lineas_iva)
+        + len(RE_FIELDS) * len(expected.recargos_equivalencia)
+        + (len(IRPF_FIELDS) if expected.retencion_irpf else 0)
+    )
     return DocumentScore(
         filename=expected.filename,
-        classification=ClassificationScore(expected.status, actual_status),
-        extraction=ExtractionScore(
-            tuple(results),
-            len(DOCUMENT_FIELDS) + len(TAX_FIELDS) * len(expected.tax_lines),
+        classification=ClassificationScore(
+            expected.validity, actual.validity if actual else None
         ),
+        extraction=ExtractionScore(tuple(results), possible_fields),
         expected_diagnostic_type=expected.diagnostic_type,
-        obtained_diagnostic_type=diagnostic_type,
+        obtained_diagnostic_type=actual.diagnostic_type if actual else None,
     )
 
 
@@ -457,22 +608,18 @@ def _ratio(numerator: int, denominator: int) -> float | None:
 
 def summarize_scores(scores: Iterable[DocumentScore]) -> dict[str, Any]:
     scores = list(scores)
-    classified = [
-        score.classification for score in scores if score.classification.scored
-    ]
-    correct = sum(classification.matched is True for classification in classified)
+    classified = [score.classification for score in scores if score.classification.scored]
+    correct = sum(item.matched is True for item in classified)
     confusion = {
         expected.value: {obtained: 0 for obtained in ("valid", "invalid", "missing")}
-        for expected in DocumentStatus
+        for expected in InvoiceValidity
     }
     for classification in classified:
-        obtained = (
-            classification.obtained.value if classification.obtained else "missing"
-        )
+        obtained = classification.obtained.value if classification.obtained else "missing"
         confusion[classification.expected.value][obtained] += 1
 
-    classification_by_status = {}
-    for status in DocumentStatus:
+    by_status = {}
+    for status in InvoiceValidity:
         true_positive = confusion[status.value][status.value]
         expected_total = sum(confusion[status.value].values())
         predicted_total = sum(row[status.value] for row in confusion.values())
@@ -484,12 +631,8 @@ def summarize_scores(scores: Iterable[DocumentScore]) -> dict[str, Any]:
         recall = _ratio(true_positive, expected_total)
         f1 = None
         if precision is not None and recall is not None:
-            f1 = (
-                0.0
-                if precision + recall == 0
-                else 2 * precision * recall / (precision + recall)
-            )
-        classification_by_status[status.value] = {
+            f1 = 0.0 if precision + recall == 0 else 2 * precision * recall / (precision + recall)
+        by_status[status.value] = {
             "precision": precision,
             "recall": recall,
             "f1": f1,
@@ -497,38 +640,33 @@ def summarize_scores(scores: Iterable[DocumentScore]) -> dict[str, Any]:
             "predicted": predicted_total,
         }
 
-    field_summary = {}
     all_fields = [field for score in scores for field in score.extraction.fields]
-    for name, label in DOCUMENT_FIELDS + TAX_FIELDS:
+    by_field = {}
+    for name, label in SUMMARY_FIELDS:
         values = [field for field in all_fields if field.field == name]
         matched = sum(field.matched for field in values)
-        field_summary[name] = {
+        by_field[name] = {
             "label": label,
             "matched": matched,
             "total": len(values),
             "accuracy": _ratio(matched, len(values)),
         }
-    extracted_correct = sum(field.matched for field in all_fields)
-    possible_fields = sum(score.extraction.possible_fields for score in scores)
-    recalls = [metrics["recall"] for metrics in classification_by_status.values()]
-    f1_scores = [metrics["f1"] for metrics in classification_by_status.values()]
-    by_diagnostic_type = {}
+    possible = sum(score.extraction.possible_fields for score in scores)
+    recalls = [metrics["recall"] for metrics in by_status.values()]
+    f1_values = [metrics["f1"] for metrics in by_status.values()]
     diagnostic_types = {score.expected_diagnostic_type or "untyped" for score in scores}
+    by_diagnostic_type = {}
     for diagnostic_type in sorted(diagnostic_types):
         group = [
             score
             for score in scores
             if (score.expected_diagnostic_type or "untyped") == diagnostic_type
         ]
-        group_classifications = [
-            score.classification for score in group if score.classification.scored
-        ]
-        group_fields = [field for score in group for field in score.extraction.fields]
+        group_classifications = [item.classification for item in group if item.classification.scored]
+        group_fields = [field for item in group for field in item.extraction.fields]
         by_diagnostic_type[diagnostic_type] = {
             "documents": len(group),
-            "classification_matched": sum(
-                item.matched is True for item in group_classifications
-            ),
+            "classification_matched": sum(item.matched is True for item in group_classifications),
             "classification_total": len(group_classifications),
             "extraction_matched": sum(field.matched for field in group_fields),
             "extraction_total": len(group_fields),
@@ -541,65 +679,44 @@ def summarize_scores(scores: Iterable[DocumentScore]) -> dict[str, Any]:
             "total": len(classified),
             "accuracy": _ratio(correct, len(classified)),
             "confusion_matrix": confusion,
-            "by_status": classification_by_status,
-            "balanced_accuracy": (
-                sum(recall for recall in recalls if recall is not None)
-                / sum(recall is not None for recall in recalls)
-                if any(recall is not None for recall in recalls)
-                else None
-            ),
-            "macro_f1": (
-                sum(f1 for f1 in f1_scores if f1 is not None)
-                / sum(f1 is not None for f1 in f1_scores)
-                if any(f1 is not None for f1 in f1_scores)
-                else None
-            ),
-            "false_valid": confusion[DocumentStatus.INVALID.value][
-                DocumentStatus.VALID.value
-            ],
-            "false_invalid": confusion[DocumentStatus.VALID.value][
-                DocumentStatus.INVALID.value
-            ],
+            "by_status": by_status,
+            "balanced_accuracy": _mean_defined(recalls),
+            "macro_f1": _mean_defined(f1_values),
+            "false_valid": confusion["invalid"]["valid"],
+            "false_invalid": confusion["valid"]["invalid"],
         },
         "extraction": {
-            "matched": extracted_correct,
+            "matched": sum(field.matched for field in all_fields),
             "total": len(all_fields),
-            "accuracy": _ratio(extracted_correct, len(all_fields)),
-            "possible_fields": possible_fields,
-            "ignored_unannotated": possible_fields - len(all_fields),
-            "coverage": _ratio(len(all_fields), possible_fields),
-            "by_field": field_summary,
+            "accuracy": _ratio(sum(field.matched for field in all_fields), len(all_fields)),
+            "possible_fields": possible,
+            "ignored_unannotated": possible - len(all_fields),
+            "coverage": _ratio(len(all_fields), possible),
+            "by_field": by_field,
         },
         "by_diagnostic_type": by_diagnostic_type,
     }
 
 
+def _mean_defined(values: Iterable[float | None]) -> float | None:
+    defined = [value for value in values if value is not None]
+    return sum(defined) / len(defined) if defined else None
+
+
 def document_score_dict(score: DocumentScore) -> dict[str, Any]:
-    """JSON-safe representation used by the level-two report writer."""
     result = asdict(score)
     for side in ("expected", "obtained"):
         status = result["classification"][side]
-        result["classification"][side] = (
-            status.value if isinstance(status, DocumentStatus) else status
-        )
+        result["classification"][side] = status.value if status else None
     result["extraction"].update(
-        {
-            "matched": score.extraction.matched,
-            "total": score.extraction.total,
-            "accuracy": score.extraction.accuracy,
-            "coverage": score.extraction.coverage,
-            "mismatches": score.extraction.mismatches,
-        }
+        matched=score.extraction.matched,
+        total=score.extraction.total,
+        accuracy=score.extraction.accuracy,
+        coverage=score.extraction.coverage,
+        mismatches=score.extraction.mismatches,
     )
     result["classification"].update(
-        {
-            "scored": score.classification.scored,
-            "matched": score.classification.matched,
-        }
+        scored=score.classification.scored,
+        matched=score.classification.matched,
     )
     return result
-
-
-def invoice_field_names() -> set[str]:
-    """Expose the unchanged production boundary for regression tests."""
-    return {item.name for item in fields(Invoice)}

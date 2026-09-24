@@ -10,10 +10,16 @@ from src.invoices.domain import (
 )
 from src.invoices.services import DownloadProcessingService, OcrProcessingService
 from src.jobs.contracts import DownloadJob
-from src.ocr.models import Invoice
+from src.ocr.models import (
+    EquivalenceSurcharge,
+    InvoiceValidity,
+    IrpfWithholding,
+    IvaLine,
+)
 from src.persistence import Database, DatabaseSettings
 from src.persistence.models import Base
 from src.persistence.unit_of_work import create_unit_of_work_factory
+from tests.invoice_fixtures import make_invoice
 
 RECEIVED_AT = datetime(2026, 9, 17, 12, 0, tzinfo=UTC)
 
@@ -90,15 +96,22 @@ def test_download_and_ocr_pipeline_is_idempotent(tmp_path):
         def extract_invoice(self, path):
             self.calls += 1
             assert path == str(stored_file.resolve())
-            return Invoice(
+            return make_invoice(
+                validity=InvoiceValidity.INVALID,
+                diagnostic_type="Proforma",
                 fecha="2026-09-17",
                 numero_factura="F-42",
                 nif_proveedor="B12345678",
                 nombre_proveedor="Supplier SL",
-                base_imponible="100.00",
-                tipo_iva="21",
-                cuota_iva="21.00",
-                total="121.00",
+                lineas_iva=(
+                    IvaLine("100.00", "21", "21.00"),
+                    IvaLine("50.00", "10", "5.00"),
+                ),
+                recargos_equivalencia=(
+                    EquivalenceSurcharge("100.00", "5.2", "5.20"),
+                ),
+                retencion_irpf=IrpfWithholding("150.00", "15", "-22.50"),
+                total="158.70",
             )
 
     downloader = FakeDownloader()
@@ -128,5 +141,17 @@ def test_download_and_ocr_pipeline_is_idempotent(tmp_path):
         assert document.ocr_attempts == 1
         assert invoice is not None
         assert invoice.invoice.numero_factura == "F-42"
+        assert invoice.invoice.validity is InvoiceValidity.INVALID
+        assert invoice.invoice.diagnostic_type == "Proforma"
+        assert invoice.invoice.lineas_iva == (
+            IvaLine("100.00", "21", "21.00"),
+            IvaLine("50.00", "10", "5.00"),
+        )
+        assert invoice.invoice.recargos_equivalencia == (
+            EquivalenceSurcharge("100.00", "5.2", "5.20"),
+        )
+        assert invoice.invoice.retencion_irpf == IrpfWithholding(
+            "150.00", "15", "-22.50"
+        )
     finally:
         database.dispose()

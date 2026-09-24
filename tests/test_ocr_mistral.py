@@ -36,7 +36,7 @@ class MistralOcrTests(unittest.TestCase):
             "pages": [{"index": 0, "markdown": "Factura Nº 001\nTotal: 12,10 €", "images": [], "dimensions": None}],
             "model": "mistral-ocr-latest",
             "usage_info": {"pages_processed": 1},
-            "document_annotation": json.dumps(asdict(Invoice.empty())),
+            "document_annotation": json.dumps(asdict(Invoice.unreadable())),
         }
         self.requests = []
         self.status = 200
@@ -88,7 +88,7 @@ class MistralOcrTests(unittest.TestCase):
                 self.assertEqual(len(self.requests), 1)
 
     def test_invoice_is_annotated_in_one_call_without_shared_parser(self):
-        values = asdict(Invoice.empty())
+        values = asdict(Invoice.unreadable())
         values.update(numero_factura="000123", nombre_proveedor="Compañía S.L.", total="12.10")
         self.response["document_annotation"] = json.dumps(values)
         with (
@@ -109,8 +109,8 @@ class MistralOcrTests(unittest.TestCase):
         self.assertEqual(set(schema["required"]), names)
         self.assertEqual(set(schema["properties"]), names)
         self.assertFalse(schema["additionalProperties"])
-        for property_ in schema["properties"].values():
-            self.assertEqual({item["type"] for item in property_["anyOf"]}, {"string", "null"})
+        self.assertEqual(schema["properties"]["lineas_iva"]["type"], "array")
+        self.assertIn("$defs", schema)
 
     def test_invoice_multipage_images_are_one_pdf_in_page_order(self):
         path = self.path.with_suffix(".tiff")
@@ -138,7 +138,7 @@ class MistralOcrTests(unittest.TestCase):
         self.assertEqual(base64.b64decode(document["document_url"].split(",", 1)[1]), content)
 
     def test_missing_or_invalid_annotations_fail_without_fallback(self):
-        values = asdict(Invoice.empty())
+        values = asdict(Invoice.unreadable())
         for annotation in (None, "", "not JSON", "null", "{}",
                            json.dumps({**values, "total": 12}),
                            json.dumps({**values, "extra": "unexpected"})):
@@ -148,9 +148,9 @@ class MistralOcrTests(unittest.TestCase):
                     with self.assertRaises(RuntimeError):
                         self.ocr.extract_invoice(str(self.path))
 
-    def test_explicit_null_fields_return_empty_invoice(self):
+    def test_explicit_unreadable_result_is_returned(self):
         self.response["pages"][0]["markdown"] = ""
-        self.assertEqual(self.ocr.extract_invoice(str(self.path)), Invoice.empty())
+        self.assertEqual(self.ocr.extract_invoice(str(self.path)), Invoice.unreadable())
 
     def test_missing_pages_are_an_error(self):
         self.response["pages"] = []

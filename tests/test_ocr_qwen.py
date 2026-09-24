@@ -124,13 +124,13 @@ class QwenOcrTests(unittest.TestCase):
         self.assertEqual(sent.getpixel((1, 1)), (0, 0, 0))
 
     def test_inherited_invoice_flow_receives_plain_text(self):
-        with patch.object(self.ocr, "parse_invoice", return_value=Invoice.empty()) as parse:
-            self.assertEqual(self.ocr.extract_invoice(str(self.path)), Invoice.empty())
+        with patch.object(self.ocr, "parse_invoice", return_value=Invoice.unreadable()) as parse:
+            self.assertEqual(self.ocr.extract_invoice(str(self.path)), Invoice.unreadable())
         parse.assert_called_once_with("Factura 000123\nEspaña: acción y niñez\nTotal 12,10 €")
 
     def test_blank_ocr_returns_empty_invoice_without_openai(self):
         self.response["choices"][0]["message"]["content"] = '{"text": ""}'
-        self.assertEqual(self.ocr.extract_invoice(str(self.path)), Invoice.empty())
+        self.assertEqual(self.ocr.extract_invoice(str(self.path)), Invoice.unreadable())
         self.assertNotIn("_client", self.ocr.__dict__)
 
     def test_bad_paths_and_corrupt_images_do_not_send_requests(self):

@@ -10,13 +10,13 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from tests.benchmark_io import atomic_write, csv_text
 from tests.invoice_accuracy_v2 import (
     DocumentScore,
     GroundTruthDocument,
     document_score_dict,
     summarize_scores,
 )
-from tests.invoice_report import atomic_write, csv_text
 
 TEMPLATE = Path(__file__).resolve().parent / "templates" / "invoice_dashboard_v2.html"
 
@@ -161,9 +161,9 @@ class LevelTwoReport:
 
 def _score_from_record(record: dict[str, Any]) -> DocumentScore:
     """Rehydrate only the immutable scoring data needed for aggregation."""
+    from src.ocr.models import InvoiceValidity
     from tests.invoice_accuracy_v2 import (
         ClassificationScore,
-        DocumentStatus,
         ExtractionScore,
         FieldResult,
     )
@@ -173,10 +173,10 @@ def _score_from_record(record: dict[str, Any]) -> DocumentScore:
     return DocumentScore(
         filename=raw["filename"],
         classification=ClassificationScore(
-            DocumentStatus(classification["expected"])
+            InvoiceValidity(classification["expected"])
             if classification["expected"]
             else None,
-            DocumentStatus(classification["obtained"])
+            InvoiceValidity(classification["obtained"])
             if classification["obtained"]
             else None,
         ),
