@@ -21,75 +21,49 @@ en puntos porcentuales: 21 para 21 %, no 0.21.
 Utiliza únicamente valores impresos. No calcules, sumes, agregues ni
 corrijas importes o porcentajes.
 """
+INVOICE_CLASSIFICATION_RULES = """Clasifica el documento principal como valid o invalid.
+Son valid las facturas, facturas simplificadas, tickets fiscales y
+facturas rectificativas. Son invalid los documentos provisionales,
+los resguardos de datáfono sin factura, los documentos que no sean
+facturas y los demasiado ilegibles para reconocer su naturaleza.
+Nunca devuelvas review. No clasifiques por una palabra aislada.
 
-INVOICE_CLASSIFICATION_RULES = """Clasifica cada documento como valid o
-invalid. Son documentos valid las facturas, facturas simplificadas o tickets
-fiscales y facturas rectificativas. Son invalid los documentos provisionales,
-los resguardos de pago de datáfono sin factura, otros documentos que no sean
-facturas y los documentos demasiado ilegibles para establecer que lo son.
-Nunca devuelvas review.
+- Provisional → invalid; diagnostic_type exactamente "Proforma".
+  Reconoce factura proforma, pro-forma, prefactura, borrador, preticket,
+  pre-ticket, comanda, precuenta, cuenta de mesa y cuenta provisional.
+  «Sin validez fiscal» o «solicite su factura» son indicios si describen
+  el documento actual. Estos documentos pueden mostrar conceptos,
+  total e IVA. No clasifiques como Proforma una factura definitiva
+  que solo haga referencia a una proforma, mesa o comanda anterior.
 
-Determina la función del documento principal a partir del encabezado, las
-expresiones destacadas, su contexto y el significado de sus identificadores.
-No decidas por una palabra aislada. Tolera errores habituales de OCR,
-variaciones de mayúsculas, tildes, espacios y puntuación. No utilices para
-clasificar texto perteneciente a otro documento visible en la imagen.
+- Resguardo de datáfono → invalid; diagnostic_type exactamente
+  "Resguardo de datáfono". Reconócelo cuando el documento registre
+  principalmente un pago con tarjeta: Visa, Mastercard, copia cliente,
+  operación aprobada o autorizada, código de autorización, tarjeta
+  enmascarada, terminal/TPV, referencia bancaria e importe cobrado.
+  Valora el conjunto: «pagado con tarjeta» dentro de una factura no
+  convierte la factura en resguardo. Si aparecen juntos una factura y
+  su resguardo, clasifica la factura; si aparecen una cuenta provisional
+  y su resguardo, clasifica la cuenta como Proforma.
 
-DOCUMENTOS PROVISIONALES — diagnostic_type exactamente "Proforma":
-Clasifica como invalid el documento principal cuando se presente como
-factura proforma, pro-forma, prefactura, borrador de factura, preticket,
-pre-ticket, ticket provisional, precuenta, cuenta provisional, comanda
-o cuenta de mesa.
+- Datos fiscales insuficientes → invalid; diagnostic_type
+  "Datos fiscales insuficientes". Aplica esta regla si un documento
+  legible se presenta como factura simplificada, afirma «IVA incluido»
+  y no muestra NI identificador fiscal del emisor (NIF/DNI/NIE) NI
+  porcentaje de IVA. «IVA incluido» no indica el porcentaje. No
+  confundas datos realmente ausentes con texto cortado o ilegible.
 
-También son indicios expresiones como «sin validez fiscal»,
-«documento no fiscal», «no válido como factura», «pendiente de facturar»
-o «solicite su factura», siempre que describan el documento principal.
+La falta de datos del comprador o de cuota de IVA separada no activa
+por sí sola ninguna de estas tres reglas. Un número de mesa, pedido
+o autorización bancaria no equivale a un número de factura. Si el
+documento claramente carece de número de factura, clasifícalo como
+invalid con otro diagnostic_type descriptivo, nunca como Proforma
+solo por esa ausencia.
 
-Una cuenta provisional de restaurante puede incluir establecimiento,
-fecha, consumiciones, total e incluso IVA. Esos datos no la convierten
-en factura definitiva. Un número de mesa, pedido, comanda o cuenta no
-equivale a un número de factura.
-
-No asignes "Proforma" a una factura definitiva por mencionar una
-proforma anterior, ni por incluir la mesa o la comanda como referencias
-internas. La ausencia de un número de factura refuerza otros indicios
-de provisionalidad, pero por sí sola no demuestra que sea una proforma:
-el OCR podría haber omitido ese número.
-
-RESGUARDOS DE DATÁFONO — diagnostic_type exactamente
-"Resguardo de datáfono":
-Clasifica como invalid el documento principal cuando registre
-principalmente una transacción con tarjeta, en vez de documentar la
-venta de bienes o servicios.
-
-Busca una combinación coherente de indicios: «copia cliente»,
-«resguardo TPV», «operación autorizada», «pago aceptado», contactless,
-número de tarjeta enmascarado, marca de tarjeta, código de autorización,
-referencia de pago, identificación del terminal o TPV, entidad bancaria
-e importe cobrado. Suele mostrar fecha, hora e importe,
-pero no conceptos comprados, base imponible, tipo ni cuota de IVA.
-La ausencia de estos datos fiscales refuerza el diagnóstico; no
-basta por sí sola para determinarlo.
-
-El código de autorización, el número del terminal y la referencia
-bancaria no son números de factura. Ningún indicio de pago aislado basta
-para clasificar el documento como resguardo: una factura también puede
-indicar que se pagó con tarjeta.
-
-Si aparecen juntos una factura y su resguardo de TPV, clasifica la
-factura cuando su sección sea identificable. Si aparecen juntos una
-cuenta provisional y su resguardo de TPV, clasifica el documento
-principal como "Proforma". No confundas «ticket» con «preticket»:
-un ticket puede ser una factura simplificada.
-
-Si falta el número de factura y el documento es suficientemente legible
-para concluir que realmente no figura, clasifícalo como invalid con
-otro diagnostic_type informativo; no lo etiquetes falsamente como
-"Proforma" ni como "Resguardo de datáfono". Para otros documentos
-invalid, diagnostic_type puede ser una etiqueta breve y descriptiva.
-
-La clasificación no detiene la extracción: devuelve todos los campos
-legibles, también cuando el documento sea invalid.
+Tolera variaciones de mayúsculas, tildes, espacios y errores de OCR.
+Para otros documentos invalid, usa un diagnostic_type breve y
+descriptivo. Clasificar como invalid no detiene la extracción:
+devuelve todos los campos legibles.
 """
 
 INVOICE_FISCAL_AND_IDENTITY_RULES = """Crea un elemento en lineas_iva
