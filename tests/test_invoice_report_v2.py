@@ -2,6 +2,7 @@
 
 import csv
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -17,7 +18,7 @@ from tests.invoice_accuracy_v2 import (
 )
 from tests.invoice_fixtures import make_invoice
 from tests.invoice_report_v2 import LevelTwoReport
-from tests.test_invoice_accuracy_v2 import _resolve_v2_image
+from tests.test_invoice_accuracy_v2 import _resolve_v2_image, _select_document
 
 
 def expected_document() -> GroundTruthDocument:
@@ -124,6 +125,30 @@ def test_v2_image_resolution_rejects_ambiguous_extensionless_stems(tmp_path):
         _resolve_v2_image(tmp_path, "invoice")
 
 
+def test_v2_document_selection_defaults_to_all_and_accepts_name_or_stem():
+    first = replace(expected_document(), filename="IMG_3321.HEIC")
+    second = replace(expected_document(), filename="IMG_3322.HEIC")
+    documents = [first, second]
+
+    assert _select_document(documents, None) == documents
+    assert _select_document(documents, "img_3321.heic") == [first]
+    assert _select_document(documents, "IMG_3321") == [first]
+
+
+def test_v2_document_selection_rejects_missing_empty_and_ambiguous_names():
+    documents = [
+        replace(expected_document(), filename="invoice.png"),
+        replace(expected_document(), filename="invoice.pdf"),
+    ]
+
+    with pytest.raises(ValueError, match="non-empty"):
+        _select_document(documents, "  ")
+    with pytest.raises(ValueError, match="No ground-truth image matches"):
+        _select_document(documents, "unknown")
+    with pytest.raises(ValueError, match="Ambiguous --ocr-image"):
+        _select_document(documents, "invoice")
+
+
 def test_level_two_runner_executes_once_and_writes_a_complete_report(
     tmp_path, monkeypatch
 ):
@@ -138,7 +163,7 @@ def test_level_two_runner_executes_once_and_writes_a_complete_report(
     monkeypatch.setattr(benchmark, "invoice_extractor", extractor)
     monkeypatch.setattr(benchmark, "load_ground_truths_v2", lambda _path: [expected])
 
-    benchmark.test_invoice_accuracy_v2(OcrScope.INVALID)
+    benchmark.test_invoice_accuracy_v2(OcrScope.INVALID, None)
 
     extractor.extract_invoice.assert_called_once_with(str(image))
     run = next((reports / "runs").iterdir())
@@ -147,3 +172,27 @@ def test_level_two_runner_executes_once_and_writes_a_complete_report(
     assert saved["scope"] == "invalid"
     assert saved["summary"]["classification"]["accuracy"] == 1
     assert (run / "dashboard.html").is_file()
+
+
+def test_level_two_runner_selects_one_image_before_ocr(tmp_path, monkeypatch):
+    selected = expected_document()
+    other = replace(selected, filename="other.png")
+    image = tmp_path / "images" / selected.filename
+    image.parent.mkdir()
+    image.touch()
+    extractor = SimpleNamespace(extract_invoice=Mock(return_value=actual_result()))
+    reports = tmp_path / "reports"
+    monkeypatch.setenv("OCR_IMAGE_DIR", str(image.parent))
+    monkeypatch.setenv("OCR_V2_REPORT_DIR", str(reports))
+    monkeypatch.setattr(benchmark, "invoice_extractor", extractor)
+    monkeypatch.setattr(
+        benchmark, "load_ground_truths_v2", lambda _path: [selected, other]
+    )
+
+    benchmark.test_invoice_accuracy_v2(OcrScope.INVALID, "one")
+
+    extractor.extract_invoice.assert_called_once_with(str(image))
+    run = next((reports / "runs").iterdir())
+    saved = json.loads((run / "run.json").read_text(encoding="utf-8"))
+    assert saved["documents_total"] == 1
+    assert [record["filename"] for record in saved["records"]] == ["one.png"]

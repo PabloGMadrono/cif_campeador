@@ -24,8 +24,8 @@ from .models import (
     CustomerRecord,
     DocumentRecord,
     InvoiceEquivalenceSurchargeRecord,
-    InvoiceRecord,
     InvoiceIvaLineRecord,
+    InvoiceRecord,
 )
 
 

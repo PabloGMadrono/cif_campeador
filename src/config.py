@@ -5,7 +5,6 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-
 # Resolve the project .env independently of the current working directory.
 # Existing environment variables take precedence over values in the file.
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")

@@ -17,7 +17,7 @@ from PIL import Image, UnidentifiedImageError
 from pillow_heif import register_heif_opener
 
 from src.ocr.models import Invoice, IvaLine
-from src.ocr.ocr_openai import Ocr_openai
+from src.ocr.ocr_openai import OPENAI_IMAGE_INVOICE_PROMPT, Ocr_openai
 from tests.invoice_fixtures import make_invoice
 
 
@@ -91,6 +91,7 @@ class OpenAIOcrTests(unittest.TestCase):
         self.assertEqual(str(self.requests[0].url), "https://api.openai.com/v1/responses")
         body = json.loads(self.requests[0].content)
         self.assertEqual(body["model"], "gpt-5.6-luna")
+        self.assertEqual(body["instructions"], OPENAI_IMAGE_INVOICE_PROMPT)
         self.assertEqual(body["reasoning"], {"effort": "low"})
         self.assertFalse(body["store"])
         self.assertEqual(self.sent_images()[0].size, (20, 30))
@@ -138,24 +139,19 @@ class OpenAIOcrTests(unittest.TestCase):
 
     def test_all_tiff_frames_are_sent_in_one_call(self):
         path = self.path.with_suffix(".tiff")
-        with Image.new("RGB", (10, 15), "white") as first:
-            with Image.new("RGB", (30, 25), "white") as second:
-                first.save(path, save_all=True, append_images=[second])
+        with (
+            Image.new("RGB", (10, 15), "white") as first,
+            Image.new("RGB", (30, 25), "white") as second,
+        ):
+            first.save(path, save_all=True, append_images=[second])
         self.ocr.extract_invoice(str(path))
         self.assertEqual(len(self.requests), 1)
         self.assertEqual([image.size for image in self.sent_images()], [(10, 15), (30, 25)])
 
-    def test_explicit_text_extraction_is_a_single_vision_call(self):
-        for text in ("Factura 000123\nEspaña: acción y niñez\nTotal 12,10 €", ""):
-            with self.subTest(text=text):
-                self.requests.clear()
-                self.set_output(json.dumps({"text": text}))
-                self.assertEqual(self.ocr.extract_text(str(self.path)), text)
-                self.assertEqual(len(self.requests), 1)
-                body = json.loads(self.requests[0].content)
-                self.assertEqual(body["model"], "gpt-5.6-luna")
-                self.assertEqual(body["reasoning"], {"effort": "low"})
-                self.assertEqual(len(self.sent_images()), 1)
+    def test_text_extraction_is_not_supported_or_sent_to_the_api(self):
+        with self.assertRaises(NotImplementedError):
+            self.ocr.extract_text(str(self.path))
+        self.assertFalse(self.requests)
 
     def test_parse_invoice_still_supports_existing_raw_text_flow(self):
         self.assertEqual(self.ocr.parse_invoice("Factura 000123"), self.expected)
@@ -177,9 +173,11 @@ class OpenAIOcrTests(unittest.TestCase):
             self.path.write_bytes(b"corrupt image")
             with self.assertRaises(UnidentifiedImageError):
                 ocr.extract_invoice(str(self.path))
-            with patch("src.ocr.ocr_openai._document_image_urls", return_value=[]):
-                with self.assertRaisesRegex(ValueError, "no pages"):
-                    ocr.extract_invoice(str(self.path))
+            with (
+                patch("src.ocr.ocr_openai._document_image_urls", return_value=[]),
+                self.assertRaisesRegex(ValueError, "no pages"),
+            ):
+                ocr.extract_invoice(str(self.path))
             factory.assert_not_called()
 
     def test_client_is_lazy_and_shared_with_text_parsing(self):

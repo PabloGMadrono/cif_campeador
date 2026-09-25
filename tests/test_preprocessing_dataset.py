@@ -14,11 +14,13 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from src.ocr.preprocessing import PreprocessingConfig, prepare_document
-from src.ocr.preprocessing import transform_points
+from src.ocr.preprocessing import (
+    PreprocessingConfig,
+    prepare_document,
+    transform_points,
+)
 from src.ocr.preprocessing_models import MODEL_MANIFEST, file_hash
 from tests.invoice_accuracy_v2 import image_index, resolve_image
-
 
 TESTS = Path(__file__).resolve().parent
 IMAGES = TESTS / "images/trial_invoices"

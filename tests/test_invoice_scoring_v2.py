@@ -127,6 +127,23 @@ def test_invoice_number_ignores_whitespace_but_preserves_punctuation():
     )
 
 
+def test_supplier_tax_id_ignores_hyphens_when_scoring():
+    assert normalize_field("nif_proveedor", "B40626392") == normalize_field(
+        "nif_proveedor", "B-40626392"
+    )
+    assert normalize_field("nif_proveedor", "B-40626392") == normalize_field(
+        "nif_proveedor", "B40626392"
+    )
+    score = score_document(
+        invoice(nif_proveedor="B-40626392"),
+        document(nif_proveedor="B40626392"),
+    )
+    nif_field = next(
+        field for field in score.extraction.fields if field.field == "nif_proveedor"
+    )
+    assert nif_field.matched is True
+
+
 @pytest.mark.parametrize("field", ["numero_factura", "nif_proveedor"])
 def test_numeric_identifiers_ignore_leading_zeroes(field):
     assert normalize_field(field, "000123") == normalize_field(field, "123")

@@ -229,6 +229,8 @@ def normalize_field(name: str, value: str | None):
     value = "".join(unicodedata.normalize("NFC", value).casefold().split())
     if value in MISSING_MARKERS:
         return None
+    if name == "nif_proveedor":
+        value = value.replace("-", "")
     if name in {"numero_factura", "nif_proveedor"} and value.isdecimal():
         return str(int(value))
     if name == "fecha":

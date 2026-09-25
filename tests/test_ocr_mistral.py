@@ -16,10 +16,10 @@ from mistralai.client import Mistral
 from PIL import Image, UnidentifiedImageError
 from pillow_heif import register_heif_opener
 
-from src.ocr.preprocessing import lossless_pdf
 from src.ocr.models import Invoice
 from src.ocr.ocr_mistral import Ocr_mistral
-from src.ocr.ocr_openai import IMAGE_INVOICE_INSTRUCTIONS
+from src.ocr.ocr_openai import OPENAI_IMAGE_INVOICE_PROMPT
+from src.ocr.preprocessing import lossless_pdf
 
 
 class MistralOcrTests(unittest.TestCase):
@@ -80,9 +80,11 @@ class MistralOcrTests(unittest.TestCase):
         for suffix in (".HEIC", ".tiff"):
             with self.subTest(suffix=suffix):
                 path = self.path.with_suffix(suffix)
-                with Image.new("RGB", (32, 48), "white") as first:
-                    with Image.new("RGB", (48, 32), "white") as second:
-                        first.save(path, save_all=True, append_images=[second] if suffix == ".tiff" else [])
+                with (
+                    Image.new("RGB", (32, 48), "white") as first,
+                    Image.new("RGB", (48, 32), "white") as second,
+                ):
+                    first.save(path, save_all=True, append_images=[second] if suffix == ".tiff" else [])
                 self.requests.clear()
                 self.ocr.extract_text(str(path))
                 self.assertEqual(len(self.requests), 1)
@@ -100,7 +102,7 @@ class MistralOcrTests(unittest.TestCase):
         self.assertEqual(asdict(result), values)
         self.assertEqual(len(self.requests), 1)
         body = json.loads(self.requests[0].content)
-        self.assertEqual(body["document_annotation_prompt"], IMAGE_INVOICE_INSTRUCTIONS)
+        self.assertEqual(body["document_annotation_prompt"], OPENAI_IMAGE_INVOICE_PROMPT)
         format_ = body["document_annotation_format"]
         self.assertEqual(format_["type"], "json_schema")
         self.assertTrue(format_["json_schema"]["strict"])
@@ -114,9 +116,11 @@ class MistralOcrTests(unittest.TestCase):
 
     def test_invoice_multipage_images_are_one_pdf_in_page_order(self):
         path = self.path.with_suffix(".tiff")
-        with Image.new("RGB", (32, 48), "white") as first:
-            with Image.new("RGB", (48, 32), "black") as second:
-                first.save(path, save_all=True, append_images=[second])
+        with (
+            Image.new("RGB", (32, 48), "white") as first,
+            Image.new("RGB", (48, 32), "black") as second,
+        ):
+            first.save(path, save_all=True, append_images=[second])
         self.ocr.extract_invoice(str(path))
         self.assertEqual(len(self.requests), 1)
         document = json.loads(self.requests[0].content)["document"]
@@ -144,9 +148,11 @@ class MistralOcrTests(unittest.TestCase):
                            json.dumps({**values, "extra": "unexpected"})):
             with self.subTest(annotation=annotation):
                 self.response["document_annotation"] = annotation
-                with patch.object(self.ocr, "parse_invoice", side_effect=AssertionError("Fallback")):
-                    with self.assertRaises(RuntimeError):
-                        self.ocr.extract_invoice(str(self.path))
+                with (
+                    patch.object(self.ocr, "parse_invoice", side_effect=AssertionError("Fallback")),
+                    self.assertRaises(RuntimeError),
+                ):
+                    self.ocr.extract_invoice(str(self.path))
 
     def test_explicit_unreadable_result_is_returned(self):
         self.response["pages"][0]["markdown"] = ""
@@ -179,11 +185,13 @@ class MistralOcrTests(unittest.TestCase):
             ocr = Ocr_mistral()
             with self.assertRaisesRegex(RuntimeError, "MISTRAL_API_KEY"):
                 ocr.extract_text(str(self.path))
-        with patch("src.ocr.ocr_mistral.MISTRAL_API_KEY", "offline-key"):
-            with patch("mistralai.client.Mistral") as factory:
-                ocr = Ocr_mistral()
-                self.assertIs(ocr._ocr_client, ocr._ocr_client)
-                factory.assert_called_once_with(api_key="offline-key", timeout_ms=120_000)
+        with (
+            patch("src.ocr.ocr_mistral.MISTRAL_API_KEY", "offline-key"),
+            patch("mistralai.client.Mistral") as factory,
+        ):
+            ocr = Ocr_mistral()
+            self.assertIs(ocr._ocr_client, ocr._ocr_client)
+            factory.assert_called_once_with(api_key="offline-key", timeout_ms=120_000)
 
     def test_api_errors_propagate(self):
         from mistralai.client.errors import SDKError

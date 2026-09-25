@@ -6,9 +6,9 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock, patch
 
-from src.ocr.ocr_abc import Ocr_operator
 from src.ocr.evidence import InvoiceEvidence, InvoiceExtraction, SourceQuote
 from src.ocr.models import Invoice
+from src.ocr.ocr_abc import Ocr_operator
 from src.ocr.ocr_surya import Ocr_surya, _html_to_text
 
 
@@ -215,16 +215,17 @@ class SuryaOcrTests(unittest.TestCase):
             "src.ocr.ocr_surya",
             SURYA_LLAMA_DEVICE="cuda",
             LLAMA_CPP_CUDA_BINARY=None,
-        ):
-            with self.assertRaisesRegex(RuntimeError, "LLAMA_CPP_CUDA_BINARY"):
-                Ocr_surya().extract_text(str(self.path))
+        ), self.assertRaisesRegex(RuntimeError, "LLAMA_CPP_CUDA_BINARY"):
+            Ocr_surya().extract_text(str(self.path))
         self.manager_factory.assert_not_called()
 
     def test_invalid_llama_device_is_rejected(self):
         self.predictor.return_value = [page([]), page([])]
-        with patch("src.ocr.ocr_surya.SURYA_LLAMA_DEVICE", "vulkan"):
-            with self.assertRaisesRegex(ValueError, "cpu.*cuda"):
-                Ocr_surya().extract_text(str(self.path))
+        with (
+            patch("src.ocr.ocr_surya.SURYA_LLAMA_DEVICE", "vulkan"),
+            self.assertRaisesRegex(ValueError, "cpu.*cuda"),
+        ):
+            Ocr_surya().extract_text(str(self.path))
         self.manager_factory.assert_not_called()
 
     def test_heic_uses_shared_preparation_without_surya_loader(self):

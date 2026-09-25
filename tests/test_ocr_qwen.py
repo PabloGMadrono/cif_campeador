@@ -90,9 +90,11 @@ class QwenOcrTests(unittest.TestCase):
 
     def test_multiframe_tiff_preserves_all_pages(self):
         path = self.path.with_suffix(".tiff")
-        with Image.new("RGB", (10, 15), "white") as first:
-            with Image.new("RGB", (30, 25), "white") as second:
-                first.save(path, save_all=True, append_images=[second])
+        with (
+            Image.new("RGB", (10, 15), "white") as first,
+            Image.new("RGB", (30, 25), "white") as second,
+        ):
+            first.save(path, save_all=True, append_images=[second])
         self.ocr.extract_text(str(path))
         self.assertEqual(self.sent_image(0).size, (10, 15))
         self.assertEqual(self.sent_image(1).size, (30, 25))

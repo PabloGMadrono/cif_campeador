@@ -1,7 +1,6 @@
 """Offline codecs, geometry, cache, fallbacks, and backend input contracts."""
 
 import base64
-import json
 import os
 import tempfile
 import unittest
@@ -15,10 +14,10 @@ from unittest.mock import Mock, patch
 import cv2
 import numpy as np
 import pypdfium2 as pdfium
-from PIL import Image, ImageDraw, ImageOps
+from PIL import Image, ImageDraw, UnidentifiedImageError
 
 from src.ocr import preprocessing as prep
-from src.ocr.preprocessing_models import file_hash, LocalModels, MODEL_MANIFEST
+from src.ocr.preprocessing_models import LocalModels
 
 
 class PreprocessingTests(unittest.TestCase):
@@ -148,7 +147,7 @@ class PreprocessingTests(unittest.TestCase):
 
     def test_sub_degree_skew_is_left_unchanged(self):
         with patch.object(prep, "estimate_skew", wraps=prep.estimate_skew) as estimate:
-            output, metadata = prep.prepare_page(np.array(self.image), replace(self.config, deskew=True), self.models)
+            _, metadata = prep.prepare_page(np.array(self.image), replace(self.config, deskew=True), self.models)
         estimate.assert_called_once()
         self.assertEqual(metadata["skew_ccw"], 0)
         self.assertEqual(metadata["output_dimensions"], [400, 600])
@@ -255,18 +254,20 @@ class PreprocessingTests(unittest.TestCase):
         with self.assertRaises(IsADirectoryError):
             self.prepare(path=self.directory)
         self.path.write_bytes(b"not an image")
-        with self.assertRaises(Exception):
+        with self.assertRaises(UnidentifiedImageError):
             self.prepare()
         self.models.orient.assert_not_called()
 
     def test_missing_weights_never_download_at_runtime(self):
-        with patch("urllib.request.urlopen", side_effect=AssertionError("Network forbidden")):
-            with self.assertRaisesRegex(RuntimeError, "setup-models"):
-                LocalModels(self.directory).orient(np.array(self.image))
+        with (
+            patch("urllib.request.urlopen", side_effect=AssertionError("Network forbidden")),
+            self.assertRaisesRegex(RuntimeError, "setup-models"),
+        ):
+            LocalModels(self.directory).orient(np.array(self.image))
 
     def test_all_backend_inputs_share_pixels_and_one_preparation_per_invocation(self):
-        from src.ocr.ocr_openai import _document_image_urls
         from src.ocr.ocr_mistral import Ocr_mistral
+        from src.ocr.ocr_openai import _document_image_urls
         from src.ocr.ocr_qwen import Ocr_qwen
         from src.ocr.ocr_surya import Ocr_surya
 

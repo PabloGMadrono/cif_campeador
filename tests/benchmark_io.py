@@ -6,7 +6,6 @@ import tempfile
 from pathlib import Path
 from time import sleep
 
-
 REPLACE_RETRY_DELAYS = (0.05, 0.1, 0.2, 0.4, 0.8)
 
 

@@ -9,7 +9,7 @@ All invoice extraction paths share Spanish invoice/receipt terminology for
 invoice numbers, supplier tax IDs (CIF/NIF/DNI/NIE/VAT) and legal names, including
 company suffixes and individual suppliers. Supplier tax IDs take priority over
 commercial names; ambiguous operation/reference numbers need document context.
-The glossary also guides Qwen and OpenAI text transcription without changing
+The glossary also guides Qwen text transcription without changing
 printed labels or omitting other text. Surya uses it in the invoice block parser;
 its local recognition predictor does not accept this prompt.
 
@@ -17,6 +17,31 @@ The shared result keeps each printed VAT row in `lineas_iva`. Equivalence
 surcharges live separately in `recargos_equivalencia`, and an explicitly
 printed withholding lives in `retencion_irpf`. Backends do not calculate an
 effective VAT rate, aggregate fiscal rows, or infer missing tax values.
+
+## Which prompt to edit
+
+The shared invoice rules are defined in `src/ocr/prompts.py`:
+
+- `INVOICE_CLASSIFICATION_RULES`: valid/invalid decisions and the Proforma rule.
+- `INVOICE_EXTRACTION_RULES`, `INVOICE_FISCAL_AND_IDENTITY_RULES`, and
+  `INVOICE_LABEL_HINTS`: field extraction rules and terminology.
+- `INVOICE_RULES`: assembles those rules for each invoice parser.
+
+Provider-specific instructions live beside their integrations:
+
+- `OPENAI_IMAGE_INVOICE_PROMPT` in `src/ocr/ocr_openai.py` adds image-reading
+  instructions to `INVOICE_RULES`. `Ocr_openai.extract_invoice` sends it in one
+  model call; this is the active application and benchmark path, selected in
+  `src/ocr/__init__.py`.
+- `SURYA_BLOCK_INVOICE_PROMPT` in `src/ocr/ocr_surya.py` adds block and source
+  citation instructions to `INVOICE_RULES`. Surya's local text recognition has
+  no LLM prompt.
+- `TEXT_INVOICE_PROMPT` in `src/ocr/ocr_abc.py` adds instructions for backends
+  that parse already-transcribed OCR text, such as Qwen.
+
+The image and block prompts both include the same classification rules. The
+`Invoice` and `InvoiceEvidence` models in `src/ocr/models.py` and
+`src/ocr/evidence.py` define the output schemas, not additional instructions.
 
 ## Mistral Document AI OCR
 
@@ -105,12 +130,11 @@ The implementation follows the official guides for
 [base64 image inputs](https://developers.openai.com/api/docs/guides/images-vision)
 and [structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs).
 
-`extract_text(path)` remains available for callers that explicitly want a
-transcription; it makes its own Responses call using the same model and low
-reasoning, and returns plain text.
-`parse_invoice(raw_text)` retains the inherited text-only parser. These methods
-are not invoked by direct invoice extraction. Both image and text paths reuse
-the base class's lazy OpenAI client and its 120-second timeout/default retries.
+`Ocr_openai.extract_text(path)` is unsupported: direct invoice extraction does
+not make an intermediate transcription call. `parse_invoice(raw_text)` retains
+the inherited text-only parser for explicitly supplied OCR text. The image and
+text parsers reuse the base class's lazy OpenAI client and its 120-second
+timeout/default retries.
 
 Unreadable fields are null. Refusals, incomplete responses, missing parsed output
 and schema violations raise `RuntimeError`; file and API errors propagate.
@@ -119,7 +143,7 @@ validate request construction and parsing, not live OCR accuracy.
 
 To use this backend for the application and accuracy benchmark, set
 `invoice_extractor = Ocr_openai()` in `src/ocr/__init__.py`, where it is already
-imported. The existing Qwen selection is preserved.
+imported. OpenAI is the current selection.
 
 ```shell
 python -m unittest tests.test_ocr_openai -v
@@ -179,7 +203,7 @@ transcription is valid and uses the base class's empty-invoice behavior.
 
 To select Qwen for the application and accuracy benchmark, change
 `src/ocr/__init__.py` to import `Ocr_qwen` from `.ocr_qwen` and assign
-`invoice_extractor = Ocr_qwen()`. Qwen is the current selection.
+`invoice_extractor = Ocr_qwen()`. OpenAI is the current selection.
 
 Run the offline adapter tests with:
 

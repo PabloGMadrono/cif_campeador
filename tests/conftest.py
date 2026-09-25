@@ -15,8 +15,19 @@ def pytest_addoption(parser):
         choices=[scope.value for scope in OcrScope],
         help="Select v2 OCR documents: valid, invalid, valid-invalid, review, or all.",
     )
+    parser.addoption(
+        "--ocr-image",
+        action="store",
+        default=None,
+        help="Run the v2 OCR benchmark for one ground-truth image (filename or stem).",
+    )
 
 
 @pytest.fixture(scope="session")
 def ocr_scope(pytestconfig) -> OcrScope:
     return OcrScope(pytestconfig.getoption("--ocr-scope"))
+
+
+@pytest.fixture(scope="session")
+def ocr_image(pytestconfig) -> str | None:
+    return pytestconfig.getoption("--ocr-image")
