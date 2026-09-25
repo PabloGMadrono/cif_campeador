@@ -53,6 +53,10 @@ Nunca devuelvas review. No clasifiques por una palabra aislada.
   porcentaje de IVA. «IVA incluido» no indica el porcentaje. No
   confundas datos realmente ausentes con texto cortado o ilegible.
 
+- Si casi no hay texto reconocible (no puedes identificar num de factura ni cif), usa validity "invalid" y diagnostic_type 
+"ilegible". No uses este diagnóstico cuando el documento se entiende pero le
+ faltan campos.
+
 La falta de datos del comprador o de cuota de IVA separada no activa
 por sí sola ninguna de estas tres reglas. Un número de mesa, pedido
 o autorización bancaria no equivale a un número de factura. Si el
