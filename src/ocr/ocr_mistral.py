@@ -14,7 +14,7 @@ from src.config import MISTRAL_API_KEY
 
 from .models import Invoice
 from .ocr_abc import Ocr_operator
-from .ocr_openai import IMAGE_INVOICE_INSTRUCTIONS
+from .ocr_openai import OPENAI_IMAGE_INVOICE_PROMPT
 from .preprocessing import image_data_url, lossless_pdf, prepare_document
 
 _INVOICE_ADAPTER = TypeAdapter(Invoice)
@@ -47,7 +47,7 @@ class Ocr_mistral(Ocr_operator):
                     "strict": True,
                 },
             },
-            document_annotation_prompt=IMAGE_INVOICE_INSTRUCTIONS,
+            document_annotation_prompt=OPENAI_IMAGE_INVOICE_PROMPT,
         )
         annotation = response.document_annotation
         if not isinstance(annotation, str) or not annotation.strip():

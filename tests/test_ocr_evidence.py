@@ -9,7 +9,7 @@ from openai import OpenAI
 
 from src.ocr.evidence import InvoiceExtraction, OcrBlock, OcrDocument, OcrPage
 from src.ocr.models import Invoice, InvoiceValidity
-from src.ocr.ocr_surya import Ocr_surya
+from src.ocr.ocr_surya import SURYA_BLOCK_INVOICE_PROMPT, Ocr_surya
 
 
 def field_evidence(value=None, *, status="missing", sources=None):
@@ -119,6 +119,7 @@ class SuryaEvidenceTests(unittest.TestCase):
         self.assertEqual(result.evidence.nif_proveedor.sources[0].block_id, "p1_b1")
         body = self.requests[0]
         self.assertEqual(body["model"], "gpt-5.6-luna")
+        self.assertEqual(body["instructions"], SURYA_BLOCK_INVOICE_PROMPT)
         self.assertFalse(body["store"])
         self.assertEqual(json.loads(body["input"][0]["content"]), self.document.model_dump())
         self.assertTrue(body["text"]["format"]["strict"])

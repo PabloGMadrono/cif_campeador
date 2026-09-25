@@ -18,7 +18,7 @@ from pillow_heif import register_heif_opener
 
 from src.ocr.models import Invoice
 from src.ocr.ocr_mistral import Ocr_mistral
-from src.ocr.ocr_openai import IMAGE_INVOICE_INSTRUCTIONS
+from src.ocr.ocr_openai import OPENAI_IMAGE_INVOICE_PROMPT
 from src.ocr.preprocessing import lossless_pdf
 
 
@@ -102,7 +102,7 @@ class MistralOcrTests(unittest.TestCase):
         self.assertEqual(asdict(result), values)
         self.assertEqual(len(self.requests), 1)
         body = json.loads(self.requests[0].content)
-        self.assertEqual(body["document_annotation_prompt"], IMAGE_INVOICE_INSTRUCTIONS)
+        self.assertEqual(body["document_annotation_prompt"], OPENAI_IMAGE_INVOICE_PROMPT)
         format_ = body["document_annotation_format"]
         self.assertEqual(format_["type"], "json_schema")
         self.assertTrue(format_["json_schema"]["strict"])

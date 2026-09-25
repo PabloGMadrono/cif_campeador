@@ -8,6 +8,7 @@ from time import monotonic
 
 from src.ocr import invoice_extractor
 from tests.invoice_accuracy_v2 import (
+    GroundTruthDocument,
     OcrScope,
     filter_scope,
     image_index,
@@ -49,8 +50,33 @@ def _percent(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.2%}"
 
 
-def test_invoice_accuracy_v2(ocr_scope: OcrScope):
-    documents = filter_scope(load_ground_truths_v2(GROUND_TRUTH), ocr_scope)
+def _select_document(
+    documents: list[GroundTruthDocument], image: str | None
+) -> list[GroundTruthDocument]:
+    """Select one annotated image before starting any OCR or report output."""
+    if image is None:
+        return documents
+    requested = image.strip().casefold()
+    if not requested:
+        raise ValueError("--ocr-image must be a non-empty filename or stem")
+    matches = [doc for doc in documents if doc.filename.casefold() == requested]
+    if not matches:
+        matches = [
+            doc for doc in documents if Path(doc.filename).stem.casefold() == requested
+        ]
+    if not matches:
+        raise ValueError(f"No ground-truth image matches --ocr-image {image!r}")
+    if len(matches) > 1:
+        raise ValueError(
+            f"Ambiguous --ocr-image {image!r}: "
+            + ", ".join(doc.filename for doc in matches)
+        )
+    return matches
+
+
+def test_invoice_accuracy_v2(ocr_scope: OcrScope, ocr_image: str | None):
+    documents = _select_document(load_ground_truths_v2(GROUND_TRUTH), ocr_image)
+    documents = filter_scope(documents, ocr_scope)
     assert documents, f"No documents selected by --ocr-scope {ocr_scope.value}"
 
     image_directory = Path(os.environ.get("OCR_IMAGE_DIR", DEFAULT_IMAGE_DIRECTORY))
