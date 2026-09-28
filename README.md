@@ -1,0 +1,1 @@
+python -m pytest tests/test_invoice_accuracy_v2.py --ocr-scope valid-invalid -s
