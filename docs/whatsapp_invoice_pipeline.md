@@ -32,6 +32,35 @@ Run the API and both independent workers in separate terminals:
 The selected OCR backend remains `invoice_extractor` in `src/ocr/__init__.py`.
 The default worker limits are 20 concurrent async downloads and one OCR task.
 
+## Reading the code
+
+- `src/workers/download.py` contains `DownloadWorker`, whose `process_download`
+  method prepares a download and records its file metadata.
+- `src/workers/ocr.py` contains `OcrWorker`, whose `process_ocr` method extracts
+  an invoice and saves the result. Both worker modules receive Redis jobs, retry
+  failed attempts, and acknowledge successful work. Their processing methods
+  use short database transactions around the file or OCR call.
+- `src/persistence/operations.py` contains queries, invoice storage functions,
+  and the shared `mark_failed` function used by both workers.
+  These use the caller's SQLAlchemy session; the caller owns the transaction.
+- `src/persistence/models.py` defines the database records used by these functions.
+- `src/ocr/__init__.py` selects the OCR backend. `OcrWorker` receives an
+  `Ocr_operator` and calls its `extract_invoice` method.
+
+Workers receive their database, backend, and settings once during startup.
+Processing and failure handling are instance methods: `process_ocr(document_id)`,
+`process_download(job)`, and `mark_failed(document_id, error)`. OCR processing
+returns a `DocumentStatus`; the worker already has the document ID for logging.
+Download processing returns the document needed for the OCR handoff.
+
+The Redis consumer receives `RedisQueueSettings` and owns the claim timeout for
+its stream and the dead-letter retention limits. Workers request stale jobs with
+`claim_stale(count=...)` without forwarding those settings on every call.
+
+`session_factory.begin()` commits on success and rolls back
+on failure. Sessions keep scalar fields available after commit; invoice reads
+convert tax relationships into the shared `Invoice` before the session closes.
+
 ## Processing guarantees
 
 - The webhook returns success only after Redis accepts every supported attachment.

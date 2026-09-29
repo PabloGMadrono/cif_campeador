@@ -37,9 +37,7 @@ class RedisQueueSettings:
         load_project_environment()
         settings = cls(
             url=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
-            download_claim_idle_ms=int(
-                os.getenv("DOWNLOAD_CLAIM_IDLE_MS", "300000")
-            ),
+            download_claim_idle_ms=int(os.getenv("DOWNLOAD_CLAIM_IDLE_MS", "300000")),
             ocr_claim_idle_ms=int(os.getenv("OCR_CLAIM_IDLE_MS", "1800000")),
             dead_letter_max_entries=int(
                 os.getenv("REDIS_DEAD_LETTER_MAX_ENTRIES", "10000")
@@ -48,12 +46,15 @@ class RedisQueueSettings:
                 os.getenv("REDIS_DEAD_LETTER_RETENTION_DAYS", "30")
             ),
         )
-        if min(
-            settings.download_claim_idle_ms,
-            settings.ocr_claim_idle_ms,
-            settings.dead_letter_max_entries,
-            settings.dead_letter_retention_days,
-        ) <= 0:
+        if (
+            min(
+                settings.download_claim_idle_ms,
+                settings.ocr_claim_idle_ms,
+                settings.dead_letter_max_entries,
+                settings.dead_letter_retention_days,
+            )
+            <= 0
+        ):
             raise ValueError("Redis queue limits and retention must be positive")
         return settings
 
@@ -91,19 +92,17 @@ class RedisStreamConsumer:
     def __init__(
         self,
         redis: Redis,
+        settings: RedisQueueSettings,
         *,
         stream: str,
         group: str,
         consumer: str | None = None,
-        dead_letter_max_entries: int = 10_000,
-        dead_letter_retention_days: int = 30,
     ) -> None:
         self.redis = redis
+        self.settings = settings
         self.stream = stream
         self.group = group
         self.consumer = consumer or f"{socket.gethostname()}-{os.getpid()}"
-        self.dead_letter_max_entries = dead_letter_max_entries
-        self.dead_letter_retention_days = dead_letter_retention_days
 
     async def ensure_group(self) -> None:
         try:
@@ -127,12 +126,12 @@ class RedisStreamConsumer:
         )
         return _parse_stream_response(response)
 
-    async def claim_stale(
-        self,
-        *,
-        min_idle_ms: int,
-        count: int,
-    ) -> list[StreamMessage]:
+    async def claim_stale(self, *, count: int) -> list[StreamMessage]:
+        min_idle_ms = (
+            self.settings.ocr_claim_idle_ms
+            if self.stream == self.settings.ocr_stream
+            else self.settings.download_claim_idle_ms
+        )
         response = await self.redis.xautoclaim(
             self.stream,
             self.group,
@@ -174,7 +173,7 @@ class RedisStreamConsumer:
         error: str,
     ) -> None:
         cutoff = datetime.now(UTC) - timedelta(
-            days=self.dead_letter_retention_days
+            days=self.settings.dead_letter_retention_days
         )
         cutoff_id = f"{int(cutoff.timestamp() * 1000)}-0"
         pipeline = self.redis.pipeline(transaction=True)
@@ -186,7 +185,7 @@ class RedisStreamConsumer:
                 "source_message_id": message.id,
                 "error": error[:2000],
             },
-            maxlen=self.dead_letter_max_entries,
+            maxlen=self.settings.dead_letter_max_entries,
             approximate=True,
         )
         pipeline.xtrim(dead_stream, minid=cutoff_id, approximate=False)

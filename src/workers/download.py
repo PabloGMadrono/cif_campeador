@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from uuid import UUID
 
 import httpx
 
-from src.invoices.domain import DocumentStatus
-from src.invoices.services import DownloadProcessingService
+from src.invoices.domain import (
+    DocumentStatus,
+    DownloadedAttachment,
+    FailureStage,
+    utc_now,
+)
 from src.jobs.contracts import DownloadJob, OcrJob
 from src.jobs.redis_streams import (
     DOWNLOAD_DEAD_STREAM,
@@ -18,8 +23,18 @@ from src.jobs.redis_streams import (
     create_redis,
 )
 from src.persistence import Database, DatabaseSettings
-from src.persistence.unit_of_work import create_unit_of_work_factory
-from src.whatsapp.media import WhatsAppMediaDownloader, WhatsAppMediaSettings
+from src.persistence.models import DocumentRecord
+from src.persistence.operations import (
+    add_document,
+    mark_failed,
+    require_document,
+    resolve_sender,
+)
+from src.whatsapp.media import (
+    WhatsAppAttachment,
+    WhatsAppMediaDownloader,
+    WhatsAppMediaSettings,
+)
 
 from .settings import WorkerSettings
 
@@ -32,23 +47,73 @@ class DownloadWorker:
         self,
         *,
         consumer: RedisStreamConsumer,
-        ocr_stream: str,
-        service: DownloadProcessingService,
+        database: Database,
+        downloader: WhatsAppMediaDownloader,
         settings: WorkerSettings,
-        claim_idle_ms: int,
     ) -> None:
         self.consumer = consumer
-        self.ocr_stream = ocr_stream
-        self.service = service
+        self.database = database
+        self.downloader = downloader
         self.settings = settings
-        self.claim_idle_ms = claim_idle_ms
+
+    async def process_download(self, job: DownloadJob) -> DocumentRecord:
+        """Commit the download attempt, fetch the file, then commit its metadata."""
+        document = await asyncio.to_thread(self._prepare_download, job)
+        if document.status != DocumentStatus.DOWNLOADING:
+            return document
+
+        attachment = WhatsAppAttachment(
+            media_id=job.whatsapp_media_id,
+            message_type=job.message_type,
+            mime_type=job.mime_type,
+            received_at=job.received_at,
+            sha256=job.sha256,
+        )
+        downloaded = await self.downloader.download(attachment)
+        return await asyncio.to_thread(
+            self._record_download,
+            job.submission_id,
+            downloaded,
+        )
+
+    def _prepare_download(self, job: DownloadJob) -> DocumentRecord:
+        with self.database.session_factory.begin() as session:
+            resolve_sender(session, job)
+            document = add_document(session, job)
+            if document.status in {DocumentStatus.RECEIVED, DocumentStatus.DOWNLOADING}:
+                document.status = DocumentStatus.DOWNLOADING
+                document.download_attempts += 1
+                document.failure_stage = None
+                document.last_error = None
+                document.updated_at = utc_now()
+        return document
+
+    def _record_download(
+        self,
+        document_id: UUID,
+        attachment: DownloadedAttachment,
+    ) -> DocumentRecord:
+        with self.database.session_factory.begin() as session:
+            document = require_document(session, document_id)
+            now = utc_now()
+            document.storage_path = attachment.storage_path
+            document.file_size = attachment.file_size
+            document.downloaded_at = now
+            document.status = DocumentStatus.DOWNLOADED
+            document.failure_stage = None
+            document.last_error = None
+            document.updated_at = now
+        return document
+
+    def mark_failed(self, document_id: UUID, error: Exception) -> None:
+        with self.database.session_factory.begin() as session:
+            mark_failed(session, document_id, error, FailureStage.DOWNLOAD)
 
     async def run_forever(self) -> None:
         await self.consumer.ensure_group()
         logger.info("Download worker ready and listening")
         while True:
             messages = await self.consumer.claim_stale(
-                min_idle_ms=self.claim_idle_ms,
                 count=self.settings.download_concurrency,
             )
             if not messages:
@@ -69,14 +134,14 @@ class DownloadWorker:
             )
             return
         try:
-            document = await self.service.process(job)
+            document = await self.process_download(job)
             if document.status not in {
                 DocumentStatus.COMPLETED,
                 DocumentStatus.FAILED,
             }:
                 await self.consumer.replace(
                     message.id,
-                    destination_stream=self.ocr_stream,
+                    destination_stream=self.consumer.settings.ocr_stream,
                     payload=OcrJob(submission_id=document.id).to_dict(),
                 )
             else:
@@ -92,7 +157,7 @@ class DownloadWorker:
                     payload=job.with_attempt(job.attempt + 1).to_dict(),
                 )
                 return
-            await asyncio.to_thread(self.service.mark_failed, job.submission_id, error)
+            await asyncio.to_thread(self.mark_failed, job.submission_id, error)
             await self.consumer.dead_letter(
                 message,
                 dead_stream=DOWNLOAD_DEAD_STREAM,
@@ -115,22 +180,13 @@ async def run() -> None:
             worker = DownloadWorker(
                 consumer=RedisStreamConsumer(
                     redis,
+                    queue_settings,
                     stream=queue_settings.download_stream,
                     group=DOWNLOAD_GROUP,
-                    dead_letter_max_entries=(
-                        queue_settings.dead_letter_max_entries
-                    ),
-                    dead_letter_retention_days=(
-                        queue_settings.dead_letter_retention_days
-                    ),
                 ),
-                ocr_stream=queue_settings.ocr_stream,
-                service=DownloadProcessingService(
-                    create_unit_of_work_factory(database),
-                    WhatsAppMediaDownloader(media_settings, client),
-                ),
+                database=database,
+                downloader=WhatsAppMediaDownloader(media_settings, client),
                 settings=worker_settings,
-                claim_idle_ms=queue_settings.download_claim_idle_ms,
             )
             await worker.run_forever()
     finally:

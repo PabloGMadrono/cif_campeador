@@ -1,4 +1,4 @@
-"""Private SQLAlchemy mappings for the invoice ingestion database."""
+"""SQLAlchemy records for the invoice ingestion database."""
 
 from __future__ import annotations
 

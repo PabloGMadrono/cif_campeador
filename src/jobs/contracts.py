@@ -1,10 +1,10 @@
-"""Queue-independent job messages and publishing interface."""
+"""Job messages and their Redis serialization."""
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any
 from uuid import UUID, uuid5
 
 from src.invoices.domain import MessageType, normalize_phone_number
@@ -57,9 +57,7 @@ class DownloadJob:
         )
 
     def with_attempt(self, attempt: int) -> DownloadJob:
-        values = self.to_dict()
-        values["attempt"] = attempt
-        return self.from_dict(values)
+        return replace(self, attempt=attempt)
 
     def to_dict(self) -> dict[str, Any]:
         values = asdict(self)
@@ -92,7 +90,7 @@ class OcrJob:
     attempt: int = 1
 
     def with_attempt(self, attempt: int) -> OcrJob:
-        return OcrJob(submission_id=self.submission_id, attempt=attempt)
+        return replace(self, attempt=attempt)
 
     def to_dict(self) -> dict[str, Any]:
         return {"submission_id": str(self.submission_id), "attempt": self.attempt}
@@ -103,9 +101,3 @@ class OcrJob:
             submission_id=UUID(values["submission_id"]),
             attempt=int(values.get("attempt", 1)),
         )
-
-
-class InvoiceJobQueue(Protocol):
-    async def enqueue_download(self, job: DownloadJob) -> str: ...
-
-    async def enqueue_ocr(self, job: OcrJob) -> str: ...
