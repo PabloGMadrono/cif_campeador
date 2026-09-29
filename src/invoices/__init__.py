@@ -1,1 +1,1 @@
-"""Invoice ingestion domain and application services."""
+"""Shared invoice ingestion statuses and data values."""

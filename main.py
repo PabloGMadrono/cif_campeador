@@ -11,7 +11,6 @@ from typing import Any
 from fastapi import FastAPI, Request, Response
 
 from src.environment import load_project_environment
-from src.jobs.contracts import InvoiceJobQueue
 from src.jobs.redis_streams import (
     RedisInvoiceJobQueue,
     RedisQueueSettings,
@@ -62,7 +61,7 @@ async def receive_webhook(request: Request) -> Response:
         return Response(content="Invalid webhook payload", status_code=400)
 
     jobs = extract_download_jobs(body)
-    queue: InvoiceJobQueue = request.app.state.job_queue
+    queue: RedisInvoiceJobQueue = request.app.state.job_queue
     if jobs:
         await asyncio.gather(*(queue.enqueue_download(job) for job in jobs))
         logger.info("Queued %s WhatsApp invoice attachment(s)", len(jobs))

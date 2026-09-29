@@ -1,4 +1,4 @@
-r"""Opt-in OCR-to-repository check for one valid and one proforma image.
+r"""Opt-in OCR-to-database check for one valid and one proforma image.
 
 Run with:
     $env:RUN_LIVE_OCR_DB_TEST = "1"
@@ -17,13 +17,18 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import text
 
-from src.invoices.domain import MessageType, StoredInvoice
+from src.invoices.domain import MessageType
 from src.jobs.contracts import DownloadJob
 from src.ocr import invoice_extractor
 from src.ocr.models import InvoiceValidity
 from src.persistence import Database, DatabaseSettings
 from src.persistence.models import Base
-from src.persistence.unit_of_work import create_unit_of_work_factory
+from src.persistence.operations import (
+    add_document,
+    get_invoice,
+    resolve_sender,
+    save_invoice,
+)
 from tests.invoice_fixtures import make_invoice
 
 IMAGES = Path(__file__).resolve().parent / "images" / "trial_invoices"
@@ -65,7 +70,6 @@ def test_database_roundtrip_with_offline_ocr(capsys):
 def _assert_ocr_database_roundtrip(extractor, *, print_rows=False):
     database = Database(DatabaseSettings("sqlite:///:memory:"))
     Base.metadata.create_all(database.engine)
-    unit_of_work_factory = create_unit_of_work_factory(database)
     observed = {}
     persisted_rows = {}
     try:
@@ -82,26 +86,21 @@ def _assert_ocr_database_roundtrip(extractor, *, print_rows=False):
                 phone_number="34638894450",
                 received_at=datetime.now(UTC),
                 original_filename=source.name,
+                meta_user_id="live-ocr-db-test",
+                profile_name="Live OCR database test",
             )
-            with unit_of_work_factory() as uow:
-                uow.customers.resolve_sender(
-                    phone_number=job.phone_number,
-                    meta_user_id="live-ocr-db-test",
-                    profile_name="Live OCR database test",
-                    seen_at=job.received_at,
+            with database.session_factory.begin() as session:
+                resolve_sender(session, job)
+                add_document(session, job)
+                save_invoice(
+                    session,
+                    job.submission_id,
+                    invoice,
+                    datetime.now(UTC),
                 )
-                uow.documents.add_if_absent(job)
-                uow.invoices.add(
-                    StoredInvoice(
-                        document_id=job.submission_id,
-                        invoice=invoice,
-                        extracted_at=datetime.now(UTC),
-                    )
-                )
-                uow.commit()
 
-            with unit_of_work_factory() as uow:
-                stored = uow.invoices.get(job.submission_id)
+            with database.session_factory() as session:
+                stored = get_invoice(session, job.submission_id)
             assert stored is not None
             assert stored.invoice == invoice
             observed[source.name] = (
@@ -138,8 +137,7 @@ def _assert_ocr_database_roundtrip(extractor, *, print_rows=False):
         }
         assert observed == expected
         assert {
-            filename: (validity, diagnosis)
-            for filename, validity, diagnosis in rows
+            filename: (validity, diagnosis) for filename, validity, diagnosis in rows
         } == {
             filename: (validity.value, diagnosis)
             for filename, (validity, diagnosis) in expected.items()

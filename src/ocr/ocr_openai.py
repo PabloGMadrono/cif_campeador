@@ -31,13 +31,6 @@ class Ocr_openai(Ocr_operator):
 
     def extract_invoice(self, path: str) -> Invoice:
         """Read images directly into Invoice without a separate OCR/parsing call."""
-        return self._extract(path)
-
-    def extract_text(self, path: str) -> str:
-        """Direct-image extraction does not provide a separate transcription."""
-        raise NotImplementedError("OpenAI direct-image extraction has no text-only mode")
-
-    def _extract(self, path: str) -> Invoice:
         image_urls = _document_image_urls(path)
         if not image_urls:
             raise ValueError("Document contains no pages")
@@ -65,6 +58,10 @@ class Ocr_openai(Ocr_operator):
         if response.output_parsed is None:
             raise RuntimeError("OCR response did not contain a parsed result")
         return response.output_parsed
+
+    def extract_text(self, path: str) -> str:
+        """Direct-image extraction does not provide a separate transcription."""
+        raise NotImplementedError("OpenAI direct-image extraction has no text-only mode")
 
 
 def _document_image_urls(path: str) -> list[str]:
