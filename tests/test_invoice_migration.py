@@ -35,7 +35,14 @@ def test_migration_preserves_the_legacy_vat_line(monkeypatch, tmp_path):
     command.upgrade(config, "head")
     inspector = sa.inspect(engine)
     invoice_columns = {column["name"] for column in inspector.get_columns("invoices")}
-    assert {"validity", "diagnostic_type", "base_retencion", "tipo_irpf", "cuota_irpf"} <= invoice_columns
+    assert {
+        "validity",
+        "diagnostic_type",
+        "fiscal_status",
+        "base_retencion",
+        "tipo_irpf",
+        "cuota_irpf",
+    } <= invoice_columns
     assert {"base_imponible", "tipo_iva", "cuota_iva"}.isdisjoint(invoice_columns)
     assert "invoice_iva_lines" in inspector.get_table_names()
     assert "invoice_equivalence_surcharges" in inspector.get_table_names()

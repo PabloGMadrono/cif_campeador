@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 from uuid import UUID
 
+from src.invoices.accounting import reconcile_invoice
 from src.invoices.domain import DocumentStatus, FailureStage, utc_now
 from src.jobs.contracts import OcrJob
 from src.jobs.redis_streams import (
@@ -19,7 +20,7 @@ from src.jobs.redis_streams import (
 from src.ocr import invoice_extractor
 from src.ocr.ocr_abc import Ocr_operator
 from src.persistence import Database, DatabaseSettings
-from src.persistence.operations import mark_failed, require_document, save_invoice
+from src.persistence.operations import InvoiceSubmissionLifecycle
 from src.whatsapp.media import WhatsAppMediaSettings
 
 from .settings import WorkerSettings
@@ -39,54 +40,38 @@ class OcrWorker:
         settings: WorkerSettings,
     ) -> None:
         self.consumer = consumer
-        self.database = database
+        self.submissions = InvoiceSubmissionLifecycle(database)
         self.extractor = extractor
         self.media_directory = media_directory
         self.settings = settings
 
     def process_ocr(self, document_id: UUID) -> DocumentStatus:
         """Commit the OCR attempt, extract outside SQL, then save the result atomically."""
-        with self.database.session_factory.begin() as session:
-            document = require_document(session, document_id)
-            if document.status in {DocumentStatus.COMPLETED, DocumentStatus.FAILED}:
-                return document.status
-            if document.status not in {
-                DocumentStatus.DOWNLOADED,
-                DocumentStatus.OCR_PROCESSING,
-            }:
-                raise RuntimeError(
-                    f"Invoice submission {document_id} is not ready for OCR"
-                )
-            now = utc_now()
-            document.status = DocumentStatus.OCR_PROCESSING
-            document.extractor_name = type(self.extractor).__name__
-            document.ocr_attempts += 1
-            document.ocr_started_at = document.ocr_started_at or now
-            document.failure_stage = None
-            document.last_error = None
-            document.updated_at = now
+        document = self.submissions.begin_ocr_attempt(
+            document_id,
+            type(self.extractor).__name__,
+        )
+        if document.status in {DocumentStatus.COMPLETED, DocumentStatus.FAILED}:
+            return document.status
 
         if not document.storage_path:
             raise RuntimeError(f"Invoice submission {document_id} has no stored file")
         absolute_path = (self.media_directory / document.storage_path).resolve()
         if not absolute_path.is_relative_to(self.media_directory.resolve()):
             raise ValueError("Stored invoice path escapes the media directory")
-        invoice = self.extractor.extract_invoice(str(absolute_path))
+        accounting_result = reconcile_invoice(
+            self.extractor.extract_invoice(str(absolute_path))
+        )
 
-        completed_at = utc_now()
-        with self.database.session_factory.begin() as session:
-            save_invoice(session, document_id, invoice, completed_at)
-            document = require_document(session, document_id)
-            document.status = DocumentStatus.COMPLETED
-            document.completed_at = completed_at
-            document.failure_stage = None
-            document.last_error = None
-            document.updated_at = completed_at
-        return document.status
+        return self.submissions.save_invoice(
+            document_id,
+            accounting_result.invoice,
+            accounting_result.status,
+            extracted_at=utc_now(),
+        )
 
     def mark_failed(self, document_id: UUID, error: Exception) -> None:
-        with self.database.session_factory.begin() as session:
-            mark_failed(session, document_id, error, FailureStage.OCR)
+        self.submissions.mark_failed(document_id, error, FailureStage.OCR)
 
     async def run_forever(self) -> None:
         await self.consumer.ensure_group()

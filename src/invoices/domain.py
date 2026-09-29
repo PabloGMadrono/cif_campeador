@@ -14,6 +14,13 @@ from src.ocr.models import Invoice
 PHONE_DIGITS = re.compile(r"^[1-9][0-9]{7,14}$")
 
 
+class FiscalStatus(StrEnum):
+    RECONCILED = "reconciled"
+    CORRECTED = "corrected"
+    MISSING_DATA = "missing_data"
+    MATH_ERROR = "math_error"
+
+
 class DocumentStatus(StrEnum):
     RECEIVED = "received"
     DOWNLOADING = "downloading"
@@ -37,6 +44,7 @@ class FailureStage(StrEnum):
 class StoredInvoice:
     document_id: UUID
     invoice: Invoice
+    fiscal_status: FiscalStatus
     extracted_at: datetime
 
 

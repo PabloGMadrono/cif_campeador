@@ -11,6 +11,7 @@ from src.invoices.domain import (
     DocumentStatus,
     DownloadedAttachment,
     FailureStage,
+    FiscalStatus,
     MessageType,
 )
 from src.jobs.contracts import DownloadJob
@@ -21,13 +22,9 @@ from src.ocr.models import (
     IvaLine,
 )
 from src.persistence import Database, DatabaseSettings
-from src.persistence.models import Base, DocumentRecord
-from src.persistence.operations import (
-    add_document,
-    get_invoice,
-    resolve_sender,
-)
-from src.workers import ocr as ocr_module
+from src.persistence import operations as persistence_operations
+from src.persistence.models import Base, CustomerPhoneRecord, DocumentRecord
+from src.persistence.operations import InvoiceSubmissionLifecycle
 from src.workers.download import DownloadWorker
 from src.workers.ocr import OcrWorker
 from src.workers.settings import WorkerSettings
@@ -58,7 +55,7 @@ def _job(message_id="message-1", phone="34638894450", meta_user_id="user-1"):
 
 def test_phone_numbers_share_customer_when_meta_user_matches(tmp_path):
     database = _database(tmp_path)
-    factory = database.session_factory
+    submissions = InvoiceSubmissionLifecycle(database)
     try:
         first_job = _job(phone="34638894450", meta_user_id="shared-user")
         second_job = DownloadJob.create(
@@ -71,11 +68,14 @@ def test_phone_numbers_share_customer_when_meta_user_matches(tmp_path):
             profile_name="Accounts",
             received_at=RECEIVED_AT + timedelta(days=1),
         )
-        with factory.begin() as session:
-            first = resolve_sender(session, first_job)
-        with factory.begin() as session:
-            second = resolve_sender(session, second_job)
+        submissions.prepare_download(first_job)
+        submissions.prepare_download(second_job)
+        with database.session_factory() as session:
+            first = session.get(CustomerPhoneRecord, first_job.phone_number)
+            second = session.get(CustomerPhoneRecord, second_job.phone_number)
 
+        assert first is not None
+        assert second is not None
         assert first.customer_id == second.customer_id
         assert first.phone_number != second.phone_number
     finally:
@@ -90,9 +90,9 @@ def downloaded_submission(tmp_path):
     media_directory = tmp_path / "media"
     media_directory.mkdir()
     (media_directory / "invoice.jpg").write_bytes(b"invoice")
+    InvoiceSubmissionLifecycle(database).prepare_download(job)
     with database.session_factory.begin() as session:
-        resolve_sender(session, job)
-        document = add_document(session, job)
+        document = session.get(DocumentRecord, job.submission_id)
         document.status = DocumentStatus.DOWNLOADED
         document.storage_path = "invoice.jpg"
         document.file_size = 7
@@ -231,7 +231,7 @@ def test_ocr_retry_keeps_committed_attempt_and_original_start_time(
         assert document.status == DocumentStatus.OCR_PROCESSING
         assert document.ocr_attempts == 1
         started_at = document.ocr_started_at
-        assert get_invoice(session, job.submission_id) is None
+    assert ocr_worker.submissions.get_invoice(job.submission_id) is None
 
     completed = process(job.submission_id)
     assert completed == DocumentStatus.COMPLETED
@@ -239,7 +239,7 @@ def test_ocr_retry_keeps_committed_attempt_and_original_start_time(
         document = session.get(DocumentRecord, job.submission_id)
         assert document.ocr_attempts == 2
         assert document.ocr_started_at == started_at
-        assert get_invoice(session, job.submission_id).invoice == expected
+    assert ocr_worker.submissions.get_invoice(job.submission_id).invoice == expected
 
 
 def test_invoice_write_and_completion_roll_back_together(
@@ -249,15 +249,22 @@ def test_invoice_write_and_completion_roll_back_together(
     extractor = ocr_worker.extractor
     extractor.extract_invoice.return_value = make_invoice()
     process = ocr_worker.process_ocr
-    save_invoice = ocr_module.save_invoice
+    require_document = persistence_operations._require_document
+    calls = 0
 
-    def fail_after_write(session, *args):
-        save_invoice(session, *args)
-        session.flush()
-        raise RuntimeError("database write failed")
+    def fail_while_completing(session, document_id):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("database write failed")
+        return require_document(session, document_id)
 
     with monkeypatch.context() as patch:
-        patch.setattr(ocr_module, "save_invoice", fail_after_write)
+        patch.setattr(
+            persistence_operations,
+            "_require_document",
+            fail_while_completing,
+        )
         with pytest.raises(RuntimeError, match="database write failed"):
             process(job.submission_id)
 
@@ -265,7 +272,7 @@ def test_invoice_write_and_completion_roll_back_together(
         document = session.get(DocumentRecord, job.submission_id)
         assert document.status == DocumentStatus.OCR_PROCESSING
         assert document.completed_at is None
-        assert get_invoice(session, job.submission_id) is None
+    assert ocr_worker.submissions.get_invoice(job.submission_id) is None
 
     assert process(job.submission_id) == DocumentStatus.COMPLETED
 
@@ -369,7 +376,7 @@ def test_download_and_ocr_pipeline_is_idempotent(tmp_path):
 
         with factory() as session:
             document = session.get(DocumentRecord, job.submission_id)
-            invoice = get_invoice(session, job.submission_id)
+        invoice = ocr_worker.submissions.get_invoice(job.submission_id)
         assert document is not None
         assert document.download_attempts == 1
         assert document.ocr_attempts == 1
@@ -387,5 +394,6 @@ def test_download_and_ocr_pipeline_is_idempotent(tmp_path):
         assert invoice.invoice.retencion_irpf == IrpfWithholding(
             "150.00", "15", "-22.50"
         )
+        assert invoice.fiscal_status is FiscalStatus.RECONCILED
     finally:
         database.dispose()

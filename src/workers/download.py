@@ -10,9 +10,7 @@ import httpx
 
 from src.invoices.domain import (
     DocumentStatus,
-    DownloadedAttachment,
     FailureStage,
-    utc_now,
 )
 from src.jobs.contracts import DownloadJob, OcrJob
 from src.jobs.redis_streams import (
@@ -24,12 +22,7 @@ from src.jobs.redis_streams import (
 )
 from src.persistence import Database, DatabaseSettings
 from src.persistence.models import DocumentRecord
-from src.persistence.operations import (
-    add_document,
-    mark_failed,
-    require_document,
-    resolve_sender,
-)
+from src.persistence.operations import InvoiceSubmissionLifecycle
 from src.whatsapp.media import (
     WhatsAppAttachment,
     WhatsAppMediaDownloader,
@@ -52,13 +45,13 @@ class DownloadWorker:
         settings: WorkerSettings,
     ) -> None:
         self.consumer = consumer
-        self.database = database
+        self.submissions = InvoiceSubmissionLifecycle(database)
         self.downloader = downloader
         self.settings = settings
 
     async def process_download(self, job: DownloadJob) -> DocumentRecord:
         """Commit the download attempt, fetch the file, then commit its metadata."""
-        document = await asyncio.to_thread(self._prepare_download, job)
+        document = await asyncio.to_thread(self.submissions.prepare_download, job)
         if document.status != DocumentStatus.DOWNLOADING:
             return document
 
@@ -71,43 +64,13 @@ class DownloadWorker:
         )
         downloaded = await self.downloader.download(attachment)
         return await asyncio.to_thread(
-            self._record_download,
+            self.submissions.record_download,
             job.submission_id,
             downloaded,
         )
 
-    def _prepare_download(self, job: DownloadJob) -> DocumentRecord:
-        with self.database.session_factory.begin() as session:
-            resolve_sender(session, job)
-            document = add_document(session, job)
-            if document.status in {DocumentStatus.RECEIVED, DocumentStatus.DOWNLOADING}:
-                document.status = DocumentStatus.DOWNLOADING
-                document.download_attempts += 1
-                document.failure_stage = None
-                document.last_error = None
-                document.updated_at = utc_now()
-        return document
-
-    def _record_download(
-        self,
-        document_id: UUID,
-        attachment: DownloadedAttachment,
-    ) -> DocumentRecord:
-        with self.database.session_factory.begin() as session:
-            document = require_document(session, document_id)
-            now = utc_now()
-            document.storage_path = attachment.storage_path
-            document.file_size = attachment.file_size
-            document.downloaded_at = now
-            document.status = DocumentStatus.DOWNLOADED
-            document.failure_stage = None
-            document.last_error = None
-            document.updated_at = now
-        return document
-
     def mark_failed(self, document_id: UUID, error: Exception) -> None:
-        with self.database.session_factory.begin() as session:
-            mark_failed(session, document_id, error, FailureStage.DOWNLOAD)
+        self.submissions.mark_failed(document_id, error, FailureStage.DOWNLOAD)
 
     async def run_forever(self) -> None:
         await self.consumer.ensure_group()
