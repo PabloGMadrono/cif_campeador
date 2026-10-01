@@ -52,7 +52,7 @@ class Ocr_surya(Ocr_operator):
     Spanish is recognized automatically; the current API takes no language
     argument. The predictor is initialized on first extraction and reused.
     Uses a CPU or NVIDIA CUDA llama.cpp build according to
-    ``SURYA_LLAMA_DEVICE``. Install both servers as described in README.md.
+    ``SURYA_LLAMA_DEVICE``. Configure the server as described in docs/development.md.
     Surya's device settings are process-wide.
     """
 
