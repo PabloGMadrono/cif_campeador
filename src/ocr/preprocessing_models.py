@@ -3,7 +3,7 @@
 DocAligner heatmap preprocessing/postprocessing adapted from DocsaidLab/DocAligner
 at 3275b0f07f8e99d8c01cb0774dea2549be1416b6 (Apache-2.0).
 Orientation preprocessing follows PaddlePaddle's pinned inference.yml.
-See docs/ocr_preprocessing.md and docs/licenses/Apache-2.0.txt.
+See docs/invoice-processing.md and docs/licenses/Apache-2.0.txt.
 """
 
 import hashlib
