@@ -17,18 +17,14 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import text
 
+from src.invoices.accounting import reconcile_invoice
 from src.invoices.domain import MessageType
 from src.jobs.contracts import DownloadJob
 from src.ocr import invoice_extractor
 from src.ocr.models import InvoiceValidity
 from src.persistence import Database, DatabaseSettings
 from src.persistence.models import Base
-from src.persistence.operations import (
-    add_document,
-    get_invoice,
-    resolve_sender,
-    save_invoice,
-)
+from src.persistence.operations import InvoiceSubmissionLifecycle
 from tests.invoice_fixtures import make_invoice
 
 IMAGES = Path(__file__).resolve().parent / "images" / "trial_invoices"
@@ -72,6 +68,7 @@ def _assert_ocr_database_roundtrip(extractor, *, print_rows=False):
     Base.metadata.create_all(database.engine)
     observed = {}
     persisted_rows = {}
+    submissions = InvoiceSubmissionLifecycle(database)
     try:
         for relative_path, _, _ in CASES:
             source = IMAGES / relative_path
@@ -89,20 +86,18 @@ def _assert_ocr_database_roundtrip(extractor, *, print_rows=False):
                 meta_user_id="live-ocr-db-test",
                 profile_name="Live OCR database test",
             )
-            with database.session_factory.begin() as session:
-                resolve_sender(session, job)
-                add_document(session, job)
-                save_invoice(
-                    session,
-                    job.submission_id,
-                    invoice,
-                    datetime.now(UTC),
-                )
+            submissions.prepare_download(job)
+            accounting_result = reconcile_invoice(invoice)
+            submissions.save_invoice(
+                job.submission_id,
+                accounting_result.invoice,
+                accounting_result.status,
+                datetime.now(UTC),
+            )
 
-            with database.session_factory() as session:
-                stored = get_invoice(session, job.submission_id)
+            stored = submissions.get_invoice(job.submission_id)
             assert stored is not None
-            assert stored.invoice == invoice
+            assert stored.invoice == accounting_result.invoice
             observed[source.name] = (
                 stored.invoice.validity,
                 stored.invoice.diagnostic_type,

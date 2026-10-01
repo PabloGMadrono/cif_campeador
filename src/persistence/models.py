@@ -19,7 +19,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
-from src.invoices.domain import DocumentStatus, FailureStage, MessageType
+from src.invoices.domain import DocumentStatus, FailureStage, FiscalStatus, MessageType
 from src.ocr.models import InvoiceValidity
 
 NAMING_CONVENTION = {
@@ -139,6 +139,14 @@ class InvoiceRecord(Base):
         index=True,
     )
     diagnostic_type: Mapped[str | None] = mapped_column(String(255))
+    fiscal_status: Mapped[FiscalStatus | None] = mapped_column(
+        Enum(
+            FiscalStatus,
+            native_enum=False,
+            length=32,
+            values_callable=lambda enum: [item.value for item in enum],
+        )
+    )
     fecha: Mapped[str | None] = mapped_column(String(64))
     numero_factura: Mapped[str | None] = mapped_column(String(255))
     nif_proveedor: Mapped[str | None] = mapped_column(String(64))

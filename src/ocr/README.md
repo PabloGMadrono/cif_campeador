@@ -432,6 +432,28 @@ python -m pytest tests/test_invoice_accuracy_v2.py --ocr-scope review -s
 python -m pytest tests/test_invoice_accuracy_v2.py --ocr-scope all -s
 ```
 
+The accounting benchmark reads
+`tests/ground_truths/ocr_ground_truth_accounting_v2.csv`, applies
+`reconcile_invoice()` to each OCR result, and then uses the same scorer and CSV
+schema. Reconciliation derives missing values only. It preserves populated OCR
+values and marks inconsistent complete data as `math_error` for manual review.
+Run it directly; the default scope is `all`:
+
+The root README documents all four persisted accounting statuses and the
+additional **Not checked** report state.
+
+```powershell
+python -m pytest tests/test_invoice_accounting_accuracy_v2.py -s
+```
+
+Its reports default to `tests/results/accounting_v2`; use
+`OCR_ACCOUNTING_V2_REPORT_DIR` to override that location. The test skips with a
+clear message until the accounting ground-truth CSV exists. It accepts the same
+`--ocr-scope`, `--ocr-image`, `OCR_TEST_SCOPE`, and `OCR_IMAGE_DIR` options as
+the raw benchmark. Its fiscal status is shown in the dashboard and exports as
+informative metadata and is not scored. See the root README for the complete
+command and option reference.
+
 `-s` disables pytest's output capture so per-document progress and metrics are
 visible while the benchmark runs; it does not change selection or scoring.
 `OCR_TEST_SCOPE` provides the same selection for CI. `valid-invalid` excludes

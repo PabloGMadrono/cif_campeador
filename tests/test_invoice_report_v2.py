@@ -8,6 +8,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from src.invoices.accounting import FiscalCorrection
 from src.ocr.models import InvoiceValidity, IvaLine
 from tests import test_invoice_accuracy_v2 as benchmark
 from tests.invoice_accuracy_v2 import (
@@ -56,7 +57,15 @@ def actual_result():
 
 def test_report_saves_json_results_fields_and_informative_diagnostic_types(tmp_path):
     expected = expected_document()
-    score = score_document(actual_result(), expected)
+    obtained = actual_result()
+    original = replace(
+        obtained,
+        lineas_iva=(IvaLine("10", "21", None),),
+    )
+    corrections = (
+        FiscalCorrection("lineas_iva[0].cuota_iva", None, "2.10"),
+    )
+    score = score_document(obtained, expected)
     report = LevelTwoReport(tmp_path, "invalid", "FakeExtractor", [expected])
 
     report.record(
@@ -65,11 +74,15 @@ def test_report_saves_json_results_fields_and_informative_diagnostic_types(tmp_p
         source_path=tmp_path / expected.filename,
         duration_seconds=1.25,
         error=None,
+        fiscal_status="corrected",
+        fiscal_corrections=corrections,
+        original=original,
+        obtained=obtained,
     )
     report.finish()
 
     saved = json.loads((report.directory / "run.json").read_text(encoding="utf-8"))
-    assert saved["schema_version"] == 2
+    assert saved["schema_version"] == 4
     assert saved["status"] == "completed"
     assert saved["summary"]["classification"]["accuracy"] == 1
     assert saved["summary"]["extraction"]["accuracy"] == 1
@@ -77,10 +90,27 @@ def test_report_saves_json_results_fields_and_informative_diagnostic_types(tmp_p
     record = saved["records"][0]
     assert record["score"]["expected_diagnostic_type"] == "Proforma"
     assert record["score"]["obtained_diagnostic_type"] == "Preticket"
+    assert record["fiscal_status"] == "corrected"
+    assert record["fiscal_corrections"] == [
+        {
+            "field": "lineas_iva[0].cuota_iva",
+            "original": None,
+            "corrected": "2.10",
+        }
+    ]
+    assert record["original"]["lineas_iva"][0]["cuota_iva"] is None
+    assert record["obtained"]["lineas_iva"][0]["cuota_iva"] == "2.1"
     dashboard = (report.directory / "dashboard.html").read_text(encoding="utf-8")
     assert "__REPORT_DATA__" not in dashboard
     assert "Proforma" in dashboard
     assert "Preticket" in dashboard
+    assert "corrected" in dashboard
+    assert "Missing values filled" in dashboard
+    assert "Accounting details" in dashboard
+    assert "Fiscal corrections" not in dashboard
+    assert "Obtained fiscal data" not in dashboard
+    assert "Show missed documents" in dashboard
+    assert "Show all" in dashboard
 
     with (report.directory / "results.csv").open(
         encoding="utf-8-sig", newline=""
@@ -89,6 +119,8 @@ def test_report_saves_json_results_fields_and_informative_diagnostic_types(tmp_p
     assert result_row["classification_matches"] == "True"
     assert result_row["expected_diagnostic_type"] == "Proforma"
     assert result_row["obtained_diagnostic_type"] == "Preticket"
+    assert result_row["fiscal_status"] == "corrected"
+    assert "lineas_iva[0].cuota_iva" in result_row["fiscal_corrections"]
 
     with (report.directory / "fields.csv").open(
         encoding="utf-8-sig", newline=""
@@ -172,6 +204,7 @@ def test_level_two_runner_executes_once_and_writes_a_complete_report(
     assert saved["scope"] == "invalid"
     assert saved["summary"]["classification"]["accuracy"] == 1
     assert (run / "dashboard.html").is_file()
+    assert "Not checked" in (run / "dashboard.html").read_text(encoding="utf-8")
 
 
 def test_level_two_runner_selects_one_image_before_ocr(tmp_path, monkeypatch):
