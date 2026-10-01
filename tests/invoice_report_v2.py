@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from src.ocr.models import Invoice
 from tests.benchmark_io import atomic_write, csv_text
 from tests.invoice_accuracy_v2 import (
     DocumentScore,
@@ -55,7 +56,7 @@ class LevelTwoReport:
         )
         self.directory = self.root / "runs" / self.run_id
         self.data = {
-            "schema_version": 2,
+            "schema_version": 4,
             "run_id": self.run_id,
             "scope": scope,
             "extractor": extractor,
@@ -76,6 +77,10 @@ class LevelTwoReport:
         source_path: Path,
         duration_seconds: float,
         error: str | None,
+        fiscal_status: str | None = None,
+        fiscal_corrections: tuple[object, ...] = (),
+        original: Invoice | None = None,
+        obtained: Invoice | None = None,
     ) -> None:
         self.data["records"].append(
             {
@@ -85,6 +90,10 @@ class LevelTwoReport:
                 "score": document_score_dict(score),
                 "duration_seconds": duration_seconds,
                 "error": error,
+                "fiscal_status": fiscal_status,
+                "fiscal_corrections": _json_value(fiscal_corrections),
+                "original": _json_value(original),
+                "obtained": _json_value(obtained),
             }
         )
         self.data["summary"] = summarize_scores(
@@ -129,6 +138,10 @@ class LevelTwoReport:
                     "classification_matches": classification["matched"],
                     "expected_diagnostic_type": score["expected_diagnostic_type"],
                     "obtained_diagnostic_type": score["obtained_diagnostic_type"],
+                    "fiscal_status": record["fiscal_status"],
+                    "fiscal_corrections": json.dumps(
+                        record["fiscal_corrections"], ensure_ascii=False
+                    ),
                     "matched_fields": extraction["matched"],
                     "scored_fields": extraction["total"],
                     "extraction_accuracy": extraction["accuracy"],

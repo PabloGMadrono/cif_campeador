@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 from time import monotonic
 
 from src.ocr import invoice_extractor
+from src.ocr.models import Invoice
 from tests.invoice_accuracy_v2 import (
     GroundTruthDocument,
     OcrScope,
@@ -74,15 +76,22 @@ def _select_document(
     return matches
 
 
-def test_invoice_accuracy_v2(ocr_scope: OcrScope, ocr_image: str | None):
-    documents = _select_document(load_ground_truths_v2(GROUND_TRUTH), ocr_image)
+def _run_accuracy_benchmark(
+    ocr_scope: OcrScope,
+    ocr_image: str | None,
+    *,
+    ground_truth: Path,
+    report_directory: Path,
+    result_transform: Callable[
+        [Invoice], tuple[Invoice, str | None, tuple[object, ...]]
+    ],
+    title: str,
+) -> None:
+    documents = _select_document(load_ground_truths_v2(ground_truth), ocr_image)
     documents = filter_scope(documents, ocr_scope)
     assert documents, f"No documents selected by --ocr-scope {ocr_scope.value}"
 
     image_directory = Path(os.environ.get("OCR_IMAGE_DIR", DEFAULT_IMAGE_DIRECTORY))
-    report_directory = Path(
-        os.environ.get("OCR_V2_REPORT_DIR", DEFAULT_REPORT_DIRECTORY)
-    )
     extractor_name = (
         f"{type(invoice_extractor).__module__}.{type(invoice_extractor).__qualname__}"
     )
@@ -94,7 +103,7 @@ def test_invoice_accuracy_v2(ocr_scope: OcrScope, ocr_image: str | None):
     completed = False
 
     print(
-        f"\nOCR level 2 · scope={ocr_scope.value} · {len(documents)} documents\n"
+        f"\n{title} · scope={ocr_scope.value} · {len(documents)} documents\n"
         f"Report: {report.directory.resolve()}",
         flush=True,
     )
@@ -102,7 +111,10 @@ def test_invoice_accuracy_v2(ocr_scope: OcrScope, ocr_image: str | None):
         for position, expected in enumerate(documents, start=1):
             started = monotonic()
             source_path = _resolve_v2_image(image_directory, expected.filename)
+            original = None
             actual = None
+            fiscal_status = None
+            fiscal_corrections = ()
             error_text = None
             print(f"[{position}/{len(documents)}] {expected.filename}", flush=True)
             try:
@@ -112,9 +124,10 @@ def test_invoice_accuracy_v2(ocr_scope: OcrScope, ocr_image: str | None):
                     invoice_extractor, "extract_invoice_with_evidence", None
                 )
                 if callable(extract_with_evidence):
-                    actual = extract_with_evidence(str(source_path)).invoice
+                    original = extract_with_evidence(str(source_path)).invoice
                 else:
-                    actual = invoice_extractor.extract_invoice(str(source_path))
+                    original = invoice_extractor.extract_invoice(str(source_path))
+                actual, fiscal_status, fiscal_corrections = result_transform(original)
             except Exception as error:  # noqa: BLE001 - every backend failure belongs in the report
                 error_text = f"{type(error).__name__}: {error}"
                 errors.append(f"{expected.filename}: {error_text}")
@@ -126,6 +139,10 @@ def test_invoice_accuracy_v2(ocr_scope: OcrScope, ocr_image: str | None):
                 source_path=source_path,
                 duration_seconds=monotonic() - started,
                 error=error_text,
+                fiscal_status=fiscal_status,
+                fiscal_corrections=fiscal_corrections,
+                original=original,
+                obtained=actual,
             )
             classification = score.classification
             classification_text = (
@@ -179,4 +196,17 @@ def test_invoice_accuracy_v2(ocr_scope: OcrScope, ocr_image: str | None):
     assert extraction["accuracy"] > PASS_THRESHOLD, (
         f"Extraction accuracy {_percent(extraction['accuracy'])} must be "
         f"greater than {PASS_THRESHOLD:.0%}"
+    )
+
+
+def test_invoice_accuracy_v2(ocr_scope: OcrScope, ocr_image: str | None):
+    _run_accuracy_benchmark(
+        ocr_scope,
+        ocr_image,
+        ground_truth=GROUND_TRUTH,
+        report_directory=Path(
+            os.environ.get("OCR_V2_REPORT_DIR", DEFAULT_REPORT_DIRECTORY)
+        ),
+        result_transform=lambda invoice: (invoice, None, ()),
+        title="OCR level 2",
     )

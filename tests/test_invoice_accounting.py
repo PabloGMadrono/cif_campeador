@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.invoices.accounting import reconcile_invoice
+from src.invoices.accounting import FiscalCorrection, reconcile_invoice
 from src.invoices.domain import FiscalStatus
 from src.ocr.models import EquivalenceSurcharge, IrpfWithholding, IvaLine
 from tests.invoice_fixtures import make_invoice
@@ -21,6 +21,18 @@ def test_fills_each_missing_vat_value(line, expected):
 
     assert result.invoice.lineas_iva == (expected,)
     assert result.status is FiscalStatus.CORRECTED
+    changed_field = next(
+        field
+        for field in ("base_imponible", "tipo_iva", "cuota_iva")
+        if getattr(line, field) != getattr(expected, field)
+    )
+    assert result.corrections == (
+        FiscalCorrection(
+            f"lineas_iva[0].{changed_field}",
+            getattr(line, changed_field),
+            getattr(expected, changed_field),
+        ),
+    )
 
 
 def test_splits_a_vat_included_total_using_the_printed_rate():
@@ -33,6 +45,10 @@ def test_splits_a_vat_included_total_using_the_printed_rate():
 
     assert result.invoice.lineas_iva == (IvaLine("100.00", "21", "21.00"),)
     assert result.status is FiscalStatus.CORRECTED
+    assert {correction.field for correction in result.corrections} == {
+        "lineas_iva[0].base_imponible",
+        "lineas_iva[0].cuota_iva",
+    }
 
 
 def test_fills_a_missing_total_from_consistent_fiscal_values():
@@ -45,6 +61,7 @@ def test_fills_a_missing_total_from_consistent_fiscal_values():
 
     assert result.invoice.total == "121.00"
     assert result.status is FiscalStatus.CORRECTED
+    assert result.corrections == (FiscalCorrection("total", None, "121.00"),)
 
 
 def test_reconciles_surcharge_and_signed_withholding():
@@ -59,18 +76,20 @@ def test_reconciles_surcharge_and_signed_withholding():
 
     assert result.invoice == invoice
     assert result.status is FiscalStatus.RECONCILED
+    assert result.corrections == ()
 
 
-def test_corrects_the_only_value_that_satisfies_row_and_total():
+def test_preserves_read_values_when_the_vat_math_is_inconsistent():
     invoice = make_invoice(
-        lineas_iva=(IvaLine("100.00", "21", "22.00"),),
-        total="121.00",
+        lineas_iva=(IvaLine("1117.04", "21.00", "230.13"),),
+        total="1347.17",
     )
 
     result = reconcile_invoice(invoice)
 
-    assert result.invoice.lineas_iva == (IvaLine("100.00", "21", "21.00"),)
-    assert result.status is FiscalStatus.CORRECTED
+    assert result.invoice == invoice
+    assert result.status is FiscalStatus.MATH_ERROR
+    assert result.corrections == ()
 
 
 def test_preserves_an_unresolvable_conflict():

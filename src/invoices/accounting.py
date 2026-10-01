@@ -14,10 +14,18 @@ HUNDRED = Decimal(100)
 class AccountingResult:
     invoice: Invoice
     status: FiscalStatus
+    corrections: tuple["FiscalCorrection", ...]
+
+
+@dataclass(frozen=True, slots=True)
+class FiscalCorrection:
+    field: str
+    original: str | None
+    corrected: str | None
 
 
 def reconcile_invoice(invoice: Invoice) -> AccountingResult:
-    """Fill derivable VAT values and check the invoice's fiscal total."""
+    """Fill missing VAT values and check the invoice without replacing OCR values."""
     reconciled = replace(
         invoice,
         lineas_iva=tuple(_fill_vat_line(line) for line in invoice.lineas_iva),
@@ -25,19 +33,40 @@ def reconcile_invoice(invoice: Invoice) -> AccountingResult:
     reconciled = _fill_from_total(reconciled)
 
     if not _has_required_values(reconciled):
-        return AccountingResult(reconciled, FiscalStatus.MISSING_DATA)
+        return _result(invoice, reconciled, FiscalStatus.MISSING_DATA)
     if _is_consistent(reconciled):
         status = (
             FiscalStatus.RECONCILED
             if reconciled == invoice
             else FiscalStatus.CORRECTED
         )
-        return AccountingResult(reconciled, status)
+        return _result(invoice, reconciled, status)
+    return _result(invoice, reconciled, FiscalStatus.MATH_ERROR)
 
-    corrections = _valid_single_field_corrections(reconciled)
-    if len(corrections) == 1:
-        return AccountingResult(corrections[0], FiscalStatus.CORRECTED)
-    return AccountingResult(reconciled, FiscalStatus.MATH_ERROR)
+
+def _result(
+    original: Invoice,
+    reconciled: Invoice,
+    status: FiscalStatus,
+) -> AccountingResult:
+    corrections = []
+    if original.total != reconciled.total:
+        corrections.append(FiscalCorrection("total", original.total, reconciled.total))
+    for index, (before, after) in enumerate(
+        zip(original.lineas_iva, reconciled.lineas_iva)
+    ):
+        for field in ("base_imponible", "tipo_iva", "cuota_iva"):
+            previous = getattr(before, field)
+            corrected = getattr(after, field)
+            if previous != corrected:
+                corrections.append(
+                    FiscalCorrection(
+                        f"lineas_iva[{index}].{field}",
+                        previous,
+                        corrected,
+                    )
+                )
+    return AccountingResult(reconciled, status, tuple(corrections))
 
 
 def _fill_vat_line(line: IvaLine) -> IvaLine:
@@ -99,39 +128,6 @@ def _fill_from_total(invoice: Invoice) -> Invoice:
     lines = list(invoice.lineas_iva)
     lines[index] = filled
     return replace(invoice, lineas_iva=tuple(lines))
-
-
-def _valid_single_field_corrections(invoice: Invoice) -> list[Invoice]:
-    candidates: list[Invoice] = []
-    lines = list(invoice.lineas_iva)
-
-    for index, line in enumerate(lines):
-        base = _decimal(line.base_imponible)
-        rate = _decimal(line.tipo_iva)
-        quota = _decimal(line.cuota_iva)
-        replacements: list[IvaLine] = []
-        if base is not None and rate is not None:
-            replacements.append(replace(line, cuota_iva=_money(base * rate / HUNDRED)))
-        if base not in (None, Decimal(0)) and quota is not None:
-            replacements.append(replace(line, tipo_iva=_number(quota * HUNDRED / base)))
-        if rate not in (None, Decimal(0)) and quota is not None:
-            replacements.append(replace(line, base_imponible=_money(quota * HUNDRED / rate)))
-
-        for replacement in replacements:
-            if replacement == line:
-                continue
-            changed = lines.copy()
-            changed[index] = replacement
-            candidate = replace(invoice, lineas_iva=tuple(changed))
-            if _is_consistent(candidate) and candidate not in candidates:
-                candidates.append(candidate)
-
-    fiscal_total = _known_fiscal_total(invoice)
-    if fiscal_total is not None:
-        candidate = replace(invoice, total=_money(fiscal_total))
-        if candidate != invoice and _is_consistent(candidate) and candidate not in candidates:
-            candidates.append(candidate)
-    return candidates
 
 
 def _has_required_values(invoice: Invoice) -> bool:
