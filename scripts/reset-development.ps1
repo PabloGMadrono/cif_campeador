@@ -8,7 +8,7 @@ $ErrorActionPreference = "Stop"
 
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $pythonExecutable = Join-Path $repositoryRoot ".venv\Scripts\python.exe"
-$databaseDirectory = Join-Path $repositoryRoot "data"
+$databaseDirectory = Join-Path $repositoryRoot "local_database"
 $databasePath = Join-Path $databaseDirectory "cif_campeador.db"
 $databaseFiles = @(
     $databasePath,

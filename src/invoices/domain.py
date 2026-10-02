@@ -40,6 +40,11 @@ class FailureStage(StrEnum):
     OCR = "ocr"
 
 
+class StorageBackend(StrEnum):
+    LOCAL = "local"
+    MINIO = "minio"
+
+
 @dataclass(frozen=True, slots=True)
 class StoredInvoice:
     document_id: UUID
@@ -51,8 +56,16 @@ class StoredInvoice:
 @dataclass(frozen=True, slots=True)
 class DownloadedAttachment:
     absolute_path: Path
-    storage_path: str
     file_size: int
+    content_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class StoredAttachment:
+    bucket: str
+    object_key: str
+    file_size: int
+    content_sha256: str
 
 
 def normalize_phone_number(value: str) -> str:

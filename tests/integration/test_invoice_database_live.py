@@ -2,7 +2,7 @@ r"""Opt-in OCR-to-database check for one valid and one proforma image.
 
 Run with:
     $env:RUN_LIVE_OCR_DB_TEST = "1"
-    & .\.venv\Scripts\python.exe -m pytest tests/test_invoice_database_live.py -v -s
+    & .\.venv\Scripts\python.exe -m pytest tests/integration/test_invoice_database_live.py -v -s
 
 The live test makes billable OCR calls. Both tests use in-memory SQLite.
 """
@@ -22,12 +22,12 @@ from src.invoices.domain import MessageType
 from src.jobs.contracts import DownloadJob
 from src.ocr import invoice_extractor
 from src.ocr.models import InvoiceValidity
-from src.persistence import Database, DatabaseSettings
-from src.persistence.models import Base
-from src.persistence.operations import InvoiceSubmissionLifecycle
+from src.sql_database import Database, DatabaseSettings
+from src.sql_database.models import Base
+from src.sql_database.operations import InvoiceSubmissionLifecycle
 from tests.invoice_fixtures import make_invoice
 
-IMAGES = Path(__file__).resolve().parent / "images" / "trial_invoices"
+IMAGES = Path(__file__).resolve().parents[1] / "images" / "trial_invoices"
 CASES = (
     ("medium/IMG_3320.HEIC", InvoiceValidity.VALID, None),
     ("easy/IMG_3321.HEIC", InvoiceValidity.INVALID, "Proforma"),

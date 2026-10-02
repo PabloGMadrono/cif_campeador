@@ -7,10 +7,10 @@ import pytest
 
 from src.invoices.accounting import reconcile_invoice
 from src.ocr.models import Invoice
-from tests import test_invoice_accuracy_v2 as benchmark
+from tests.benchmarks import test_invoice_accuracy_v2 as benchmark
 from tests.invoice_accuracy_v2 import OcrScope
 
-TESTS = Path(__file__).resolve().parent
+TESTS = Path(__file__).resolve().parents[1]
 GROUND_TRUTH = TESTS / "ground_truths" / "ocr_ground_truth_accounting_v2.csv"
 DEFAULT_REPORT_DIRECTORY = TESTS / "results" / "accounting_v2"
 

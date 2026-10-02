@@ -10,7 +10,11 @@ import pytest
 
 from src.invoices.accounting import FiscalCorrection
 from src.ocr.models import InvoiceValidity, IvaLine
-from tests import test_invoice_accuracy_v2 as benchmark
+from tests.benchmarks import test_invoice_accuracy_v2 as benchmark
+from tests.benchmarks.test_invoice_accuracy_v2 import (
+    _resolve_v2_image,
+    _select_document,
+)
 from tests.invoice_accuracy_v2 import (
     GroundTruthDocument,
     GroundTruthIvaLine,
@@ -19,7 +23,6 @@ from tests.invoice_accuracy_v2 import (
 )
 from tests.invoice_fixtures import make_invoice
 from tests.invoice_report_v2 import LevelTwoReport
-from tests.test_invoice_accuracy_v2 import _resolve_v2_image, _select_document
 
 
 def expected_document() -> GroundTruthDocument:

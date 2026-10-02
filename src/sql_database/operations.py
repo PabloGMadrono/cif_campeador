@@ -3,21 +3,22 @@
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from src.invoices.domain import (
     DocumentStatus,
-    DownloadedAttachment,
     FailureStage,
     FiscalStatus,
+    StorageBackend,
+    StoredAttachment,
     StoredInvoice,
     utc_now,
 )
 from src.jobs.contracts import DownloadJob
 from src.ocr.models import EquivalenceSurcharge, Invoice, IrpfWithholding, IvaLine
 
-from .database import Database
+from .connection import Database
 from .models import (
     CustomerPhoneRecord,
     CustomerRecord,
@@ -51,18 +52,28 @@ class InvoiceSubmissionLifecycle:
     def record_download(
         self,
         document_id: UUID,
-        attachment: DownloadedAttachment,
+        attachment: StoredAttachment,
     ) -> DocumentRecord:
         with self.database.session_factory.begin() as session:
-            document = _require_document(session, document_id)
             now = utc_now()
-            document.storage_path = attachment.storage_path
-            document.file_size = attachment.file_size
-            document.downloaded_at = now
-            document.status = DocumentStatus.DOWNLOADED
-            _clear_failure(document)
-            document.updated_at = now
-            return document
+            # A stale download must not move an OCR/completed submission backwards.
+            session.execute(
+                update(DocumentRecord)
+                .where(DocumentRecord.id == document_id, DocumentRecord.status == DocumentStatus.DOWNLOADING)
+                .values(
+                    storage_backend=StorageBackend.MINIO,
+                    storage_bucket=attachment.bucket,
+                    storage_object_key=attachment.object_key,
+                    content_sha256=attachment.content_sha256,
+                    file_size=attachment.file_size,
+                    downloaded_at=now,
+                    status=DocumentStatus.DOWNLOADED,
+                    failure_stage=None,
+                    last_error=None,
+                    updated_at=now,
+                )
+            )
+            return _require_document(session, document_id)
 
     def begin_ocr_attempt(
         self,

@@ -2,7 +2,7 @@
 
 [Start here](../README.md) · [Architecture](architecture.md) · [Processing](invoice-processing.md) · [Development](development.md)
 
-[SQLAlchemy records](../src/persistence/models.py) define the tables;
+[SQLAlchemy records](../src/sql_database/models.py) define the tables;
 [Alembic migrations](../migrations/versions) evolve the schema.
 
 ```mermaid
@@ -20,7 +20,7 @@ erDiagram
 | --- | --- | --- | --- |
 | `customers` | Holds our customer's legal and contact information independently of the phone they use. One customer can have several phone numbers. This is the submitter, not the invoice supplier. | UUID `id`; unique optional `tax_id` | `display_name`, optional `legal_name`, `tax_id`, `address`, `email`; `is_provisional`; creation/update timestamps. |
 | `customer_phone_numbers` | Maps each sender phone to a customer, so submissions from different registered numbers belong to the same customer. Each phone belongs to one customer and can send many submissions. | `phone_number` primary key; `customer_id` → customer | Optional `meta_user_id`, `profile_name`; `first_seen_at`, `last_seen_at`. Meta user ID is indexed but not unique. |
-| `invoice_submissions` | Processing audit record for each attachment: when it arrived, downloaded, and underwent OCR, which extractor ran, and whether processing failed. Links the sender phone to at most one extracted invoice; failed processing can leave no invoice. | UUID `id`; unique `whatsapp_message_id`; `sender_phone_number` → phone | Meta `whatsapp_media_id`, `message_type`, `mime_type`, optional `sha256` and `original_filename`; downloaded `storage_path` (unique) and `file_size`; processing fields below. |
+| `invoice_submissions` | Processing audit record for each attachment: when it arrived, downloaded, and underwent OCR, which extractor ran, and whether processing failed. Links the sender phone to at most one extracted invoice; failed processing can leave no invoice. | UUID `id`; unique `whatsapp_message_id`; `sender_phone_number` → phone; unique `(storage_bucket, storage_object_key)` | Meta `whatsapp_media_id`, `message_type`, `mime_type`, optional `sha256` and `original_filename`; `storage_backend`, `storage_bucket`, `storage_object_key`, `content_sha256`, `file_size`; legacy `storage_path` (unique); processing fields below. |
 | `invoices` | Main business result: extracted invoice information and its classification/accounting decisions. One row per submission, with zero or more VAT and RE rows. Keeps invoice data separate from processing metadata. | `document_id` is both primary key and FK → submission | `validity`, `diagnostic_type`, `fiscal_status`; `fecha`, `numero_factura`, `nif_proveedor`, `nombre_proveedor`, `total`; optional `base_retencion`, `tipo_irpf`, `cuota_irpf`; `extracted_at`. |
 | `invoice_iva_lines` | Stores the repeatable VAT breakdown: one invoice can contain several tax bases/rates. Separate rows preserve each breakdown without duplicating the parent invoice. | Composite key `(document_id, position)`; `document_id` → invoice | `base_imponible` (taxable base), `tipo_iva` (VAT percentage), `cuota_iva` (VAT amount). |
 | `invoice_equivalence_surcharges` | Stores repeatable RE breakdowns separately from VAT because they are different fiscal concepts. One invoice can contain several surcharge rows without duplicating the parent invoice. | Composite key `(document_id, position)`; `document_id` → invoice | `base_imponible`, `tipo_re` (surcharge percentage), `cuota_re` (surcharge amount). |
@@ -99,7 +99,12 @@ its signed amount.
   supplier tax IDs retain printed punctuation and leading zeroes.
 - `cuota_irpf` preserves its printed sign; the total check adds that signed amount.
 - Phone keys use a leading `+` and 8–15 international digits. Event timestamps are
-  converted to UTC. `storage_path` is relative to `WHATSAPP_MEDIA_DIR`.
+  converted to UTC. `storage_path` is relative to `WHATSAPP_MEDIA_DIR` and retained
+  only for legacy originals and migration rollback.
+- `storage_backend` is `local` for backfilled legacy records and `minio` for new
+  submissions. Stored MinIO originals require bucket, object key, byte size, and
+  lowercase hex `content_sha256`. WhatsApp's optional `sha256` remains a base64
+  source digest. URLs and credentials are never persisted in these records.
 - Historical invoice rows may have null `validity` or `fiscal_status`. The domain
   reader rejects them with a reprocessing error; it does not invent decisions.
 

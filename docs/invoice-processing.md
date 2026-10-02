@@ -18,6 +18,12 @@ customer.
 
 ## Preparation and extraction
 
+New originals live in private MinIO storage. The OCR worker retrieves a temporary
+file, verifies its size and SHA-256 against SQL, and removes the temporary input
+after the attempt. Existing local originals remain readable until migrated.
+Rendered original/prepared pages in the preprocessing cache remain local and
+disposable; they are not the durable source attachment.
+
 [src/ocr/__init__.py](../src/ocr/__init__.py) selects one shared
 `invoice_extractor` for both workers and benchmarks. Every backend returns the
 strict [Invoice model](../src/ocr/models.py).
@@ -69,7 +75,7 @@ validator applied after extraction. Refusals, malformed output, and provider/fil
 errors raise failures rather than silently returning a successful partial result.
 An empty usable text result returns an invalid `Unreadable` invoice.
 
-## Accounting before persistence
+## Accounting before saving to SQL
 
 [reconcile_invoice()](../src/invoices/accounting.py) operates independently of
 validity. It preserves populated OCR values and can fill missing VAT fields from

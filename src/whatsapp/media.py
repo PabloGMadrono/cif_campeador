@@ -7,7 +7,6 @@ import binascii
 import hashlib
 import hmac
 import os
-import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -26,7 +25,6 @@ MEDIA_EXTENSIONS = {
     "image/webp": ".webp",
     "application/pdf": ".pdf",
 }
-SAFE_FILENAME_CHARACTER = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,7 +95,8 @@ class WhatsAppMediaDownloader:
         self.settings = settings
         self.client = client
 
-    async def download(self, attachment: WhatsAppAttachment) -> DownloadedAttachment:
+    async def download(self, attachment: WhatsAppAttachment, directory: Path) -> DownloadedAttachment:
+        """Download validated bytes into a temporary directory owned by the caller."""
         if not self.settings.access_token:
             raise RuntimeError("WHATSAPP_ACCESS_TOKEN is required to download media")
 
@@ -115,10 +114,7 @@ class WhatsAppMediaDownloader:
         )
         self._validate_download_url(download_url)
 
-        date_path = attachment.received_at.strftime("%Y/%m/%d")
-        relative_path = Path(date_path) / f"{_safe_filename(attachment.media_id)}{extension}"
-        output_path = self.settings.media_directory / relative_path
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path = directory / f"original{extension}"
         temporary_path = output_path.with_suffix(f"{output_path.suffix}.part")
 
         digest = hashlib.sha256()
@@ -146,7 +142,7 @@ class WhatsAppMediaDownloader:
                         digest.update(chunk)
                         output_file.write(chunk)
 
-            _verify_digest(attachment.sha256, digest.digest())
+            verify_media_digest(attachment.sha256, digest.digest())
             temporary_path.replace(output_path)
         except Exception:
             temporary_path.unlink(missing_ok=True)
@@ -154,8 +150,8 @@ class WhatsAppMediaDownloader:
 
         return DownloadedAttachment(
             absolute_path=output_path,
-            storage_path=relative_path.as_posix(),
             file_size=downloaded_bytes,
+            content_sha256=digest.hexdigest(),
         )
 
     async def _retrieve_download_url(self, media_id: str) -> str:
@@ -178,7 +174,8 @@ class WhatsAppMediaDownloader:
             raise ValueError(f"Refusing untrusted WhatsApp media URL: {url!r}")
 
 
-def _verify_digest(expected_sha256: str | None, digest: bytes) -> None:
+def verify_media_digest(expected_sha256: str | None, digest: bytes) -> None:
+    """Verify WhatsApp's optional base64 SHA-256 at the media boundary."""
     if not expected_sha256:
         return
     try:
@@ -187,10 +184,3 @@ def _verify_digest(expected_sha256: str | None, digest: bytes) -> None:
         raise ValueError("Webhook contained an invalid base64 SHA-256 digest") from error
     if not hmac.compare_digest(expected_digest, digest):
         raise ValueError("Downloaded attachment failed SHA-256 verification")
-
-
-def _safe_filename(value: str) -> str:
-    sanitized = SAFE_FILENAME_CHARACTER.sub("_", value).strip("._")
-    if not sanitized:
-        raise ValueError("WhatsApp media id cannot produce an empty filename")
-    return sanitized[:120]

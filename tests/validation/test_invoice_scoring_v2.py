@@ -27,7 +27,7 @@ from tests.invoice_accuracy_v2 import (
 )
 from tests.invoice_fixtures import make_invoice
 
-GROUND_TRUTH = Path(__file__).parent / "ground_truths" / "ocr_ground_truth_v2.csv"
+GROUND_TRUTH = Path(__file__).resolve().parents[1] / "ground_truths" / "ocr_ground_truth_v2.csv"
 
 
 def document(**changes):
