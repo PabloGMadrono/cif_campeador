@@ -171,6 +171,7 @@ def _worker(worker_type, consumer):
     return worker_type(
         consumer=consumer,
         database=Mock(),
+        object_storage=Mock(),
         settings=WorkerSettings(20, 3, 1, 3, (0,)),
         **dependencies,
     )

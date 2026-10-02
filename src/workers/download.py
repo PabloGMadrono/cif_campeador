@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from uuid import UUID
 
 import httpx
@@ -20,9 +22,11 @@ from src.jobs.redis_streams import (
     StreamMessage,
     create_redis,
 )
-from src.persistence import Database, DatabaseSettings
-from src.persistence.models import DocumentRecord
-from src.persistence.operations import InvoiceSubmissionLifecycle
+from src.object_storage import MinioObjectStorage, MinioSettings
+from src.object_storage.minio import original_object_key
+from src.sql_database import Database, DatabaseSettings
+from src.sql_database.models import DocumentRecord
+from src.sql_database.operations import InvoiceSubmissionLifecycle
 from src.whatsapp.media import (
     WhatsAppAttachment,
     WhatsAppMediaDownloader,
@@ -42,11 +46,13 @@ class DownloadWorker:
         consumer: RedisStreamConsumer,
         database: Database,
         downloader: WhatsAppMediaDownloader,
+        object_storage: MinioObjectStorage,
         settings: WorkerSettings,
     ) -> None:
         self.consumer = consumer
         self.submissions = InvoiceSubmissionLifecycle(database)
         self.downloader = downloader
+        self.object_storage = object_storage
         self.settings = settings
 
     async def process_download(self, job: DownloadJob) -> DocumentRecord:
@@ -62,11 +68,14 @@ class DownloadWorker:
             received_at=job.received_at,
             sha256=job.sha256,
         )
-        downloaded = await self.downloader.download(attachment)
+        with TemporaryDirectory(prefix="invoice-download-") as temporary_directory:
+            downloaded = await self.downloader.download(attachment, Path(temporary_directory))
+            key = original_object_key(document.id, document.received_at, downloaded.absolute_path.suffix)
+            stored = await asyncio.to_thread(self.object_storage.upload, downloaded, key, document.mime_type)
         return await asyncio.to_thread(
             self.submissions.record_download,
             job.submission_id,
-            downloaded,
+            stored,
         )
 
     def mark_failed(self, document_id: UUID, error: Exception) -> None:
@@ -133,6 +142,8 @@ async def run() -> None:
     queue_settings = RedisQueueSettings.from_environment()
     worker_settings = WorkerSettings.from_environment()
     media_settings = WhatsAppMediaSettings.from_environment()
+    object_storage = MinioObjectStorage(MinioSettings.from_environment())
+    await asyncio.to_thread(object_storage.ensure_bucket)
     redis = create_redis(queue_settings)
     database = Database(DatabaseSettings.from_environment())
     try:
@@ -149,6 +160,7 @@ async def run() -> None:
                 ),
                 database=database,
                 downloader=WhatsAppMediaDownloader(media_settings, client),
+                object_storage=object_storage,
                 settings=worker_settings,
             )
             await worker.run_forever()

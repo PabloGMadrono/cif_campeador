@@ -72,9 +72,13 @@ try {
         Assert-LastCommandSucceeded "Python dependency installation failed."
     }
 
-    Write-Host "Starting Redis..."
-    & docker compose up -d redis
-    Assert-LastCommandSucceeded "Redis could not be started."
+    Write-Host "Starting Redis and MinIO..."
+    & docker compose up -d --wait redis minio
+    Assert-LastCommandSucceeded "Redis and MinIO could not be started."
+
+    Write-Host "Provisioning private MinIO storage..."
+    & docker compose run --rm minio-init
+    Assert-LastCommandSucceeded "MinIO storage could not be provisioned."
 
     Write-Host "Waiting for Redis..."
     $redisReady = $false
@@ -118,6 +122,8 @@ try {
     Write-Host "Development services started."
     Write-Host "FastAPI:     http://localhost:8000"
     Write-Host "Redis:       localhost:6379"
+    Write-Host "MinIO S3:    http://localhost:9000"
+    Write-Host "MinIO console: http://localhost:9001"
     Write-Host "RedisInsight: http://localhost:5540 (when its container is running)"
 }
 finally {

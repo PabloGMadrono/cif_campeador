@@ -1,4 +1,4 @@
-"""Accounting checks applied after OCR and before persistence."""
+"""Accounting checks applied after OCR and before saving to SQL."""
 
 from dataclasses import dataclass, replace
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation

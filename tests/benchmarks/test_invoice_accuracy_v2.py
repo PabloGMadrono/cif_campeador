@@ -21,7 +21,7 @@ from tests.invoice_accuracy_v2 import (
 )
 from tests.invoice_report_v2 import LevelTwoReport
 
-TESTS = Path(__file__).resolve().parent
+TESTS = Path(__file__).resolve().parents[1]
 GROUND_TRUTH = TESTS / "ground_truths" / "ocr_ground_truth_v2.csv"
 DEFAULT_IMAGE_DIRECTORY = TESTS / "images"
 DEFAULT_REPORT_DIRECTORY = TESTS / "results" / "v2"

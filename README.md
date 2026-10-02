@@ -2,7 +2,7 @@
 
 CIF Campeador receives invoice attachments through WhatsApp, downloads them,
 extracts structured invoice data with OCR, checks the fiscal arithmetic, and
-stores the results in SQL. Download and OCR run asynchronously through Redis
+stores originals in private MinIO storage and results in SQL. Download and OCR run asynchronously through Redis
 Streams.
 
 ![Invoice processing architecture](docs/architecture-diagram.png)
@@ -18,6 +18,9 @@ shown in the diagram are not implemented in this repository.
 | [Invoice processing](docs/invoice-processing.md) | How one attachment becomes a classified, reconciled invoice. |
 | [Data model](docs/data-model.md) | Tables, relationships, field conventions, and every stored status. |
 | [Development](docs/development.md) | Setup, configuration, tests, benchmarks, and where to make changes. |
+| [Test suites](tests/README.md) | Benchmarking, functionality validation, and integration test folders and commands. |
+
+Feature specification: [MinIO media storage](docs/minio-media-storage-spec.md).
 
 For local development, create `.venv`, install `requirements-dev.txt`, and
 configure `.env` from `.env.example` as described in the development guide. Then:
@@ -26,5 +29,5 @@ configure `.env` from `.env.example` as described in the development guide. Then
 .\scripts\start-development.ps1
 ```
 
-The script starts Redis, applies migrations, and opens the API, both workers,
+The script starts Redis and MinIO, provisions the private bucket, applies migrations, and opens the API, both workers,
 and ngrok. Docker Desktop must be running; use `-SkipNgrok` for local-only work.

@@ -1,7 +1,9 @@
 """Offline integration tests for SQL persistence and pipeline idempotency."""
 
 import asyncio
+import hashlib
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import Mock
 from uuid import uuid4
 
@@ -13,6 +15,7 @@ from src.invoices.domain import (
     FailureStage,
     FiscalStatus,
     MessageType,
+    StorageBackend,
 )
 from src.jobs.contracts import DownloadJob
 from src.ocr.models import (
@@ -21,14 +24,15 @@ from src.ocr.models import (
     IrpfWithholding,
     IvaLine,
 )
-from src.persistence import Database, DatabaseSettings
-from src.persistence import operations as persistence_operations
-from src.persistence.models import Base, CustomerPhoneRecord, DocumentRecord
-from src.persistence.operations import InvoiceSubmissionLifecycle
+from src.sql_database import Database, DatabaseSettings
+from src.sql_database import operations as sql_operations
+from src.sql_database.models import Base, CustomerPhoneRecord, DocumentRecord
+from src.sql_database.operations import InvoiceSubmissionLifecycle
 from src.workers.download import DownloadWorker
 from src.workers.ocr import OcrWorker
 from src.workers.settings import WorkerSettings
 from tests.invoice_fixtures import make_invoice
+from tests.object_storage_fixtures import make_object_storage
 
 RECEIVED_AT = datetime(2026, 9, 17, 12, 0, tzinfo=UTC)
 SETTINGS = WorkerSettings(20, 3, 1, 3, (0,))
@@ -95,6 +99,7 @@ def downloaded_submission(tmp_path):
         document = session.get(DocumentRecord, job.submission_id)
         document.status = DocumentStatus.DOWNLOADED
         document.storage_path = "invoice.jpg"
+        document.storage_backend = StorageBackend.LOCAL
         document.file_size = 7
         document.download_attempts = 1
     try:
@@ -111,6 +116,7 @@ def ocr_worker(downloaded_submission):
         database=database,
         extractor=Mock(),
         media_directory=media_directory,
+        object_storage=make_object_storage(),
         settings=SETTINGS,
     )
 
@@ -122,6 +128,7 @@ def download_worker(downloaded_submission):
         consumer=Mock(),
         database=database,
         downloader=Mock(),
+        object_storage=make_object_storage(),
         settings=SETTINGS,
     )
 
@@ -249,7 +256,7 @@ def test_invoice_write_and_completion_roll_back_together(
     extractor = ocr_worker.extractor
     extractor.extract_invoice.return_value = make_invoice()
     process = ocr_worker.process_ocr
-    require_document = persistence_operations._require_document
+    require_document = sql_operations._require_document
     calls = 0
 
     def fail_while_completing(session, document_id):
@@ -261,7 +268,7 @@ def test_invoice_write_and_completion_roll_back_together(
 
     with monkeypatch.context() as patch:
         patch.setattr(
-            persistence_operations,
+            sql_operations,
             "_require_document",
             fail_while_completing,
         )
@@ -301,23 +308,26 @@ def test_ocr_rejects_unknown_submission(ocr_worker):
     extractor.extract_invoice.assert_not_called()
 
 
-def test_download_and_ocr_pipeline_is_idempotent(tmp_path):
+@pytest.mark.parametrize("mime_type,extension", [("image/jpeg", ".jpg"), ("application/pdf", ".pdf")])
+def test_download_and_ocr_pipeline_is_idempotent(tmp_path, mime_type, extension):
     database = _database(tmp_path)
     factory = database.session_factory
-    media_directory = tmp_path / "media"
-    stored_file = media_directory / "2026/09/17/media-message-1.jpg"
-    stored_file.parent.mkdir(parents=True)
-    stored_file.write_bytes(b"invoice")
+    media_directory = tmp_path / "unused-legacy-media"
+    object_storage = make_object_storage()
+    temporary_paths = []
 
     class FakeDownloader:
         calls = 0
 
-        async def download(self, attachment):
+        async def download(self, attachment, directory):
             self.calls += 1
+            stored_file = directory / f"original{extension}"
+            stored_file.write_bytes(b"invoice")
+            temporary_paths.append(stored_file)
             return DownloadedAttachment(
                 absolute_path=stored_file,
-                storage_path="2026/09/17/media-message-1.jpg",
                 file_size=7,
+                content_sha256=hashlib.sha256(b"invoice").hexdigest(),
             )
 
     class FakeExtractor:
@@ -325,7 +335,10 @@ def test_download_and_ocr_pipeline_is_idempotent(tmp_path):
 
         def extract_invoice(self, path):
             self.calls += 1
-            assert path == str(stored_file.resolve())
+            path = Path(path)
+            assert path.read_bytes() == b"invoice"
+            assert path.suffix == extension
+            temporary_paths.append(path)
             return make_invoice(
                 validity=InvoiceValidity.INVALID,
                 diagnostic_type="Proforma",
@@ -348,6 +361,7 @@ def test_download_and_ocr_pipeline_is_idempotent(tmp_path):
         consumer=Mock(),
         database=database,
         downloader=downloader,
+        object_storage=object_storage,
         settings=SETTINGS,
     )
     ocr_worker = OcrWorker(
@@ -355,11 +369,19 @@ def test_download_and_ocr_pipeline_is_idempotent(tmp_path):
         database=database,
         extractor=extractor,
         media_directory=media_directory,
+        object_storage=object_storage,
         settings=SETTINGS,
     )
     download = download_worker.process_download
     ocr = ocr_worker.process_ocr
-    job = _job()
+    job = DownloadJob.create(
+        whatsapp_message_id="message-1",
+        whatsapp_media_id="media-1",
+        message_type=MessageType.DOCUMENT if extension == ".pdf" else MessageType.IMAGE,
+        mime_type=mime_type,
+        phone_number="34638894450",
+        received_at=RECEIVED_AT,
+    )
 
     try:
         first_download = asyncio.run(download(job))
@@ -373,6 +395,10 @@ def test_download_and_ocr_pipeline_is_idempotent(tmp_path):
         assert second_ocr == DocumentStatus.COMPLETED
         assert downloader.calls == 1
         assert extractor.calls == 1
+        assert object_storage.client.uploads == 1
+        assert not media_directory.exists()
+        assert all(not path.exists() for path in temporary_paths)
+        assert temporary_paths[0].parent != temporary_paths[1].parent
 
         with factory() as session:
             document = session.get(DocumentRecord, job.submission_id)
@@ -380,6 +406,10 @@ def test_download_and_ocr_pipeline_is_idempotent(tmp_path):
         assert document is not None
         assert document.download_attempts == 1
         assert document.ocr_attempts == 1
+        assert document.storage_backend is StorageBackend.MINIO
+        assert document.storage_path is None
+        assert document.storage_bucket == "invoice-originals"
+        assert document.storage_object_key == f"originals/2026/09/17/{job.submission_id}{extension}"
         assert invoice is not None
         assert invoice.invoice.numero_factura == "F-42"
         assert invoice.invoice.validity is InvoiceValidity.INVALID

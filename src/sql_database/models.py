@@ -15,11 +15,19 @@ from sqlalchemy import (
     MetaData,
     String,
     Text,
+    UniqueConstraint,
     Uuid,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
-from src.invoices.domain import DocumentStatus, FailureStage, FiscalStatus, MessageType
+from src.invoices.domain import (
+    DocumentStatus,
+    FailureStage,
+    FiscalStatus,
+    MessageType,
+    StorageBackend,
+    StoredAttachment,
+)
 from src.ocr.models import InvoiceValidity
 
 NAMING_CONVENTION = {
@@ -87,6 +95,13 @@ class DocumentRecord(Base):
     sha256: Mapped[str | None] = mapped_column(String(128))
     original_filename: Mapped[str | None] = mapped_column(String(255))
     storage_path: Mapped[str | None] = mapped_column(String(1024), unique=True)
+    storage_backend: Mapped[StorageBackend] = mapped_column(
+        Enum(StorageBackend, native_enum=False, length=16, values_callable=lambda enum: [item.value for item in enum]),
+        default=StorageBackend.MINIO,
+    )
+    storage_bucket: Mapped[str | None] = mapped_column(String(63))
+    storage_object_key: Mapped[str | None] = mapped_column(String(1024))
+    content_sha256: Mapped[str | None] = mapped_column(String(64))
     file_size: Mapped[int | None] = mapped_column(Integer)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     downloaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -118,7 +133,14 @@ class DocumentRecord(Base):
 
     __table_args__ = (
         Index("ix_invoice_submissions_status_received", "status", "received_at"),
+        UniqueConstraint("storage_bucket", "storage_object_key", name="uq_invoice_submissions_object"),
     )
+
+    def stored_attachment(self) -> StoredAttachment:
+        """Require complete persisted object metadata before reading an original."""
+        if not self.storage_bucket or not self.storage_object_key or not self.content_sha256 or self.file_size is None:
+            raise RuntimeError(f"Invoice submission {self.id} has incomplete MinIO metadata")
+        return StoredAttachment(self.storage_bucket, self.storage_object_key, self.file_size, self.content_sha256)
 
 
 class InvoiceRecord(Base):

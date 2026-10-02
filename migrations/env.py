@@ -7,8 +7,8 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 from sqlalchemy.engine import make_url
 
-from src.persistence.database import DatabaseSettings
-from src.persistence.models import Base
+from src.sql_database.connection import DatabaseSettings
+from src.sql_database.models import Base
 
 config = context.config
 if config.config_file_name is not None:

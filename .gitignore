@@ -37,6 +37,7 @@ htmlcov/
 
 # Generated OCR reports are ignored by tests/results/.gitignore
 /data/
+/local_database/
 
 # Local logs, notebook checkpoints, and editor temporary files
 *.log

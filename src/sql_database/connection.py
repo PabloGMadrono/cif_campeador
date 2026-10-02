@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from src.environment import PROJECT_ROOT, load_project_environment
 
-DEFAULT_DATABASE_URL = "sqlite:///./data/cif_campeador.db"
+DEFAULT_DATABASE_URL = "sqlite:///./local_database/cif_campeador.db"
 
 
 @dataclass(frozen=True, slots=True)

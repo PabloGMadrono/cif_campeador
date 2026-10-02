@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from uuid import UUID
 
 from src.invoices.accounting import reconcile_invoice
-from src.invoices.domain import DocumentStatus, FailureStage, utc_now
+from src.invoices.domain import DocumentStatus, FailureStage, StorageBackend, utc_now
 from src.jobs.contracts import OcrJob
 from src.jobs.redis_streams import (
     OCR_DEAD_STREAM,
@@ -17,11 +18,13 @@ from src.jobs.redis_streams import (
     StreamMessage,
     create_redis,
 )
+from src.object_storage import MinioObjectStorage, MinioSettings
+from src.object_storage.files import legacy_media_path
 from src.ocr import invoice_extractor
 from src.ocr.ocr_abc import Ocr_operator
-from src.persistence import Database, DatabaseSettings
-from src.persistence.operations import InvoiceSubmissionLifecycle
-from src.whatsapp.media import WhatsAppMediaSettings
+from src.sql_database import Database, DatabaseSettings
+from src.sql_database.operations import InvoiceSubmissionLifecycle
+from src.whatsapp.media import MEDIA_EXTENSIONS, WhatsAppMediaSettings
 
 from .settings import WorkerSettings
 
@@ -37,12 +40,14 @@ class OcrWorker:
         database: Database,
         extractor: Ocr_operator,
         media_directory: Path,
+        object_storage: MinioObjectStorage,
         settings: WorkerSettings,
     ) -> None:
         self.consumer = consumer
         self.submissions = InvoiceSubmissionLifecycle(database)
         self.extractor = extractor
         self.media_directory = media_directory
+        self.object_storage = object_storage
         self.settings = settings
 
     def process_ocr(self, document_id: UUID) -> DocumentStatus:
@@ -54,14 +59,16 @@ class OcrWorker:
         if document.status in {DocumentStatus.COMPLETED, DocumentStatus.FAILED}:
             return document.status
 
-        if not document.storage_path:
-            raise RuntimeError(f"Invoice submission {document_id} has no stored file")
-        absolute_path = (self.media_directory / document.storage_path).resolve()
-        if not absolute_path.is_relative_to(self.media_directory.resolve()):
-            raise ValueError("Stored invoice path escapes the media directory")
-        accounting_result = reconcile_invoice(
-            self.extractor.extract_invoice(str(absolute_path))
-        )
+        if document.storage_backend is StorageBackend.LOCAL:
+            absolute_path = legacy_media_path(self.media_directory, document.storage_path)
+            invoice = self.extractor.extract_invoice(str(absolute_path))
+        else:
+            stored = document.stored_attachment()
+            with TemporaryDirectory(prefix="invoice-ocr-") as temporary_directory:
+                absolute_path = Path(temporary_directory) / f"original{MEDIA_EXTENSIONS[document.mime_type]}"
+                self.object_storage.download(stored, absolute_path)
+                invoice = self.extractor.extract_invoice(str(absolute_path))
+        accounting_result = reconcile_invoice(invoice)
 
         return self.submissions.save_invoice(
             document_id,
@@ -128,6 +135,8 @@ async def run() -> None:
     queue_settings = RedisQueueSettings.from_environment()
     worker_settings = WorkerSettings.from_environment()
     media_settings = WhatsAppMediaSettings.from_environment()
+    object_storage = MinioObjectStorage(MinioSettings.from_environment())
+    await asyncio.to_thread(object_storage.ensure_bucket)
     redis = create_redis(queue_settings)
     database = Database(DatabaseSettings.from_environment())
     try:
@@ -141,6 +150,7 @@ async def run() -> None:
             database=database,
             extractor=invoice_extractor,
             media_directory=media_settings.media_directory,
+            object_storage=object_storage,
             settings=worker_settings,
         )
         await worker.run_forever()

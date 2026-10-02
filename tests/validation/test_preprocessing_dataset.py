@@ -22,10 +22,10 @@ from src.ocr.preprocessing import (
 from src.ocr.preprocessing_models import MODEL_MANIFEST, file_hash
 from tests.invoice_accuracy_v2 import image_index, resolve_image
 
-TESTS = Path(__file__).resolve().parent
+TESTS = Path(__file__).resolve().parents[1]
 IMAGES = TESTS / "images/trial_invoices"
 ANNOTATIONS = TESTS / "ground_truths/preprocessing.json"
-MODELS = Path(__file__).resolve().parents[1] / ".ocr_preprocessing/models"
+MODELS = TESTS.parent / ".ocr_preprocessing/models"
 
 
 def assess(page, annotation):
